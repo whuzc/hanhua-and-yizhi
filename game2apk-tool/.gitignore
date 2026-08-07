@@ -1,0 +1,12 @@
+.work/
+.state/
+.gradle-user-home/
+__pycache__/
+*.pyc
+dist/portable/
+dist/*.apk
+dist/*.aab
+*.keystore
+*.jks
+*.rpgsave
+

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "touch": {
+    "cancelKeyCode": 27,
+    "twoFingerWindowMs": 250,
+    "touchSlopPx": 24
+  },
+  "overlay": {
+    "opacity": 0.38,
+    "hiddenByDefault": false
+  },
+  "buttons": [
+    {"id": "left", "label": "\u2190", "keyCode": 37, "mode": "hold", "x": 0.04, "y": 0.80, "width": 0.10, "height": 0.12},
+    {"id": "up", "label": "\u2191", "keyCode": 38, "mode": "hold", "x": 0.15, "y": 0.67, "width": 0.10, "height": 0.12},
+    {"id": "down", "label": "\u2193", "keyCode": 40, "mode": "hold", "x": 0.15, "y": 0.82, "width": 0.10, "height": 0.12},
+    {"id": "right", "label": "\u2192", "keyCode": 39, "mode": "hold", "x": 0.26, "y": 0.80, "width": 0.10, "height": 0.12},
+    {"id": "confirm", "label": "OK", "keyCode": 13, "mode": "tap", "x": 0.67, "y": 0.58, "width": 0.14, "height": 0.10},
+    {"id": "cancel", "label": "X", "keyCode": 88, "mode": "tap", "x": 0.83, "y": 0.58, "width": 0.14, "height": 0.10},
+    {"id": "esc", "label": "ESC", "keyCode": 27, "mode": "tap", "x": 0.67, "y": 0.71, "width": 0.14, "height": 0.10},
+    {"id": "portrait", "label": "A", "keyCode": 65, "mode": "tap", "x": 0.83, "y": 0.71, "width": 0.14, "height": 0.10}
+  ]
+}

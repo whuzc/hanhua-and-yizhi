@@ -1,0 +1,9 @@
+{
+  "name": "game2apk-synthetic-mv-fixture",
+  "version": "1.0.0",
+  "window": {
+    "width": 1024,
+    "height": 768,
+    "title": "Game2Apk synthetic MV input fixture"
+  }
+}

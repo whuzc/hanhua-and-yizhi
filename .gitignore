@@ -1,0 +1,23 @@
+# Gradle 缓存（根目录与 game2apk-tool 内均存在）
+.gradle-user-home/
+
+# 测试游戏实例（原游戏、旧 android 失败样本），不纳入版本库
+仙肴圣餐超魔改 Ver22/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 工作区副本与签名状态
+.work/
+.state/
+
+# 构建输出产物
+dist/portable/
+dist/*.apk
+dist/*.aab
+
+# 密钥与存档
+*.keystore
+*.jks
+*.rpgsave

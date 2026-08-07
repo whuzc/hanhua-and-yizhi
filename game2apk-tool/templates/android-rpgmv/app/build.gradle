@@ -1,0 +1,58 @@
+plugins {
+    id 'com.android.application'
+}
+
+def requiredOrDefault = { String propertyName, String defaultValue ->
+    providers.gradleProperty(propertyName).orElse(defaultValue).get()
+}
+
+android {
+    namespace 'com.game2apk.rpgmv'
+    compileSdk 36
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    defaultConfig {
+        applicationId requiredOrDefault('game2apkApplicationId', 'com.game2apk.template.rpgmv')
+        minSdk 24
+        targetSdk 36
+        versionCode Integer.parseInt(requiredOrDefault('game2apkVersionCode', '2'))
+        versionName requiredOrDefault('game2apkVersionName', '1.0.1')
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+
+    buildTypes {
+        debug {
+            debuggable true
+        }
+        release {
+            debuggable false
+            minifyEnabled false
+            shrinkResources false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    androidResources {
+        noCompress += ['rpgmvp', 'rpgmvo', 'rpgmvm', 'ogg', 'm4a', 'webm']
+    }
+
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+            returnDefaultValues = true
+            all {
+                maxParallelForks = 1
+            }
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.16.0'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+}

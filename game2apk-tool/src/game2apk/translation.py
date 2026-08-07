@@ -1,0 +1,691 @@
+"""Safe RPG Maker MV text extraction and optional DeepSeek pre-translation."""
+
+from __future__ import annotations
+
+import difflib
+import hashlib
+import json
+import os
+import re
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Any, Callable, Iterable, Protocol
+
+from .errors import BlockedError, CancelledError, ConfigurationError, TranslationError
+from .models import TranslationEntry, TranslationFailure, TranslationReport
+from .security import atomic_write_json, redact_text
+
+
+PROMPT_VERSION = "mv-safe-v1"
+_CONTROL_RE = re.compile(r"\\[A-Za-z]+(?:\[[^\]]*\])?|%\d+|\{\d+\}|\{\{[^{}]+\}\}|<[^>]+>|\\[nrt\\\"']")
+_CJK_RE = re.compile(r"[\u3400-\u9fff]")
+_HIRAGANA_RE = re.compile(r"[\u3040-\u309f]")
+_KATAKANA_RE = re.compile(r"[\u30a0-\u30ff\u31f0-\u31ff]")
+_TEXT_KEYS = {
+    "name",
+    "description",
+    "profile",
+    "nickname",
+    "message1",
+    "message2",
+    "message3",
+    "message4",
+    "help",
+    "text",
+    "displayname",
+    "display_name",
+}
+
+
+def json_pointer(*parts: str | int) -> str:
+    encoded = []
+    for part in parts:
+        text = str(part).replace("~", "~0").replace("/", "~1")
+        encoded.append(text)
+    return "/" + "/".join(encoded)
+
+
+def pointer_parts(pointer: str) -> list[str]:
+    if pointer in {"", "/"}:
+        return []
+    if not pointer.startswith("/"):
+        raise ValueError(f"not a JSON pointer: {pointer}")
+    return [part.replace("~1", "/").replace("~0", "~") for part in pointer[1:].split("/")]
+
+
+def get_pointer(data: Any, pointer: str) -> Any:
+    current = data
+    for part in pointer_parts(pointer):
+        current = current[int(part)] if isinstance(current, list) else current[part]
+    return current
+
+
+def set_pointer(data: Any, pointer: str, value: Any) -> None:
+    parts = pointer_parts(pointer)
+    if not parts:
+        raise ValueError("root replacement is not supported")
+    current = data
+    for part in parts[:-1]:
+        current = current[int(part)] if isinstance(current, list) else current[part]
+    last = parts[-1]
+    if isinstance(current, list):
+        current[int(last)] = value
+    else:
+        current[last] = value
+
+
+def placeholder_tokens(text: str) -> list[str]:
+    return _CONTROL_RE.findall(text)
+
+
+def protect_text(text: str) -> tuple[str, list[str]]:
+    tokens: list[str] = []
+
+    def replace(match: re.Match[str]) -> str:
+        tokens.append(match.group(0))
+        return f"__G2A_TOKEN_{len(tokens) - 1:03d}__"
+
+    return _CONTROL_RE.sub(replace, text), tokens
+
+
+def validate_placeholders(original: str, translated: str) -> tuple[bool, str]:
+    expected = placeholder_tokens(original)
+    actual = placeholder_tokens(translated)
+    if expected != actual:
+        return False, f"placeholder mismatch: expected {expected!r}, got {actual!r}"
+    # A response containing a transport marker rather than the original token is
+    # not accepted even when the marker count is accidentally correct.
+    if "__G2A_TOKEN_" in translated:
+        return False, "translation still contains an internal protected-token marker"
+    return True, "ok"
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _load_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise TranslationError(f"unable to read translation JSON: {path}") from exc
+
+
+def _entry_id(relative_file: str, field: str, locations: list[str]) -> str:
+    seed = "|".join([relative_file, field, *locations])
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
+
+
+def _make_entry(relative_file: str, kind: str, field: str, segments: list[str], locations: list[str]) -> TranslationEntry | None:
+    if not segments or len(segments) != len(locations) or not any(segment.strip() for segment in segments):
+        return None
+    normalized = [str(segment) for segment in segments]
+    return TranslationEntry(
+        entry_id=_entry_id(relative_file, field, locations),
+        relative_file=relative_file,
+        kind=kind,
+        field=field,
+        segments=normalized,
+        locations=list(locations),
+        source_sha256=_sha256("\n".join(normalized)),
+        placeholder_tokens=[placeholder_tokens(segment) for segment in normalized],
+    )
+
+
+def _walk_event_lists(value: Any, pointer: str = "") -> Iterable[tuple[list[Any], str]]:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            child_pointer = json_pointer(*pointer_parts(pointer), key)
+            if key == "list" and isinstance(item, list) and all(isinstance(command, dict) for command in item):
+                yield item, child_pointer
+            else:
+                yield from _walk_event_lists(item, child_pointer)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _walk_event_lists(item, json_pointer(*pointer_parts(pointer), index))
+
+
+def _extract_event_list(relative_file: str, event_list: list[Any], list_pointer: str) -> list[TranslationEntry]:
+    result: list[TranslationEntry] = []
+    index = 0
+    while index < len(event_list):
+        command = event_list[index]
+        if not isinstance(command, dict):
+            index += 1
+            continue
+        code = command.get("code")
+        params = command.get("parameters") if isinstance(command.get("parameters"), list) else []
+        if code in {101, 105}:
+            continuation_code = 401 if code == 101 else 405
+            continuation = index + 1
+            segments: list[str] = []
+            locations: list[str] = []
+            while continuation < len(event_list):
+                next_command = event_list[continuation]
+                if not isinstance(next_command, dict) or next_command.get("code") != continuation_code:
+                    break
+                next_params = next_command.get("parameters") if isinstance(next_command.get("parameters"), list) else []
+                if not next_params or not isinstance(next_params[0], str):
+                    break
+                segments.append(next_params[0])
+                locations.append(json_pointer(*pointer_parts(list_pointer), continuation, "parameters", 0))
+                continuation += 1
+
+            if code == 101:
+                # Some message plugins append speakerName as parameter 4. It
+                # is metadata, not the message body; the real body is still
+                # the following 401 command block.
+                if len(params) >= 5 and isinstance(params[4], str):
+                    speaker = _make_entry(
+                        relative_file,
+                        "speaker-name",
+                        "speakerName",
+                        [params[4]],
+                        [json_pointer(*pointer_parts(list_pointer), index, "parameters", 4)],
+                    )
+                    if speaker:
+                        result.append(speaker)
+                entry = _make_entry(relative_file, "message", "message", segments, locations)
+            else:
+                entry = _make_entry(relative_file, "scroll-text", "scrollText", segments, locations)
+            if entry:
+                result.append(entry)
+            if continuation > index + 1:
+                index = continuation
+                continue
+        elif code == 102 and params and isinstance(params[0], list):
+            choices = [choice for choice in params[0] if isinstance(choice, str)]
+            locations = [
+                json_pointer(*pointer_parts(list_pointer), index, "parameters", 0, choice_index)
+                for choice_index, choice in enumerate(params[0])
+                if isinstance(choice, str)
+            ]
+            entry = _make_entry(relative_file, "choice", "choices", choices, locations)
+            if entry:
+                result.append(entry)
+        index += 1
+    return result
+
+
+def _extract_system(relative_file: str, data: dict[str, Any]) -> list[TranslationEntry]:
+    result: list[TranslationEntry] = []
+    if isinstance(data.get("gameTitle"), str):
+        location = json_pointer("gameTitle")
+        entry = _make_entry(relative_file, "system-title", "gameTitle", [data["gameTitle"]], [location])
+        if entry:
+            result.append(entry)
+    terms = data.get("terms")
+    for pointer, value in _walk_allowed_strings(terms, json_pointer("terms")):
+        entry = _make_entry(relative_file, "system-term", pointer_parts(pointer)[-1], [value], [pointer])
+        if entry:
+            result.append(entry)
+    return result
+
+
+def _walk_allowed_strings(value: Any, pointer: str) -> Iterable[tuple[str, str]]:
+    if isinstance(value, str):
+        yield pointer, value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from _walk_allowed_strings(item, json_pointer(*pointer_parts(pointer), key))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _walk_allowed_strings(item, json_pointer(*pointer_parts(pointer), index))
+
+
+def _extract_database_fields(relative_file: str, data: Any) -> list[TranslationEntry]:
+    result: list[TranslationEntry] = []
+
+    def visit(value: Any, pointer: str) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                child = json_pointer(*pointer_parts(pointer), key)
+                key_folded = str(key).casefold()
+                if key_folded in _TEXT_KEYS and isinstance(item, str):
+                    entry = _make_entry(relative_file, "database-field", str(key), [item], [child])
+                    if entry:
+                        result.append(entry)
+                elif key_folded not in {"note", "notes", "script", "filename", "file", "path", "url", "image", "charactername", "face"}:
+                    visit(item, child)
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                visit(item, json_pointer(*pointer_parts(pointer), index))
+
+    visit(data, "")
+    return result
+
+
+def extract_safe_entries(www: str | Path) -> list[TranslationEntry]:
+    root = Path(www).resolve(strict=True)
+    result: list[TranslationEntry] = []
+    for path in sorted(root.rglob("*.json"), key=lambda item: item.as_posix().casefold()):
+        if not path.is_file() or path.is_symlink():
+            continue
+        relative = path.relative_to(root).as_posix()
+        try:
+            data = _load_json(path)
+        except TranslationError:
+            continue
+        if path.name.casefold() == "system.json" and isinstance(data, dict):
+            result.extend(_extract_system(relative, data))
+        elif path.name.casefold().startswith("map") and path.name.casefold().endswith(".json"):
+            for event_list, pointer in _walk_event_lists(data):
+                result.extend(_extract_event_list(relative, event_list, pointer))
+            # MapInfos and a few custom projects contain display names outside event lists.
+            if path.name.casefold() == "mapinfos.json":
+                result.extend(_extract_database_fields(relative, data))
+        elif path.name.casefold() == "commonevents.json":
+            for event_list, pointer in _walk_event_lists(data):
+                result.extend(_extract_event_list(relative, event_list, pointer))
+        else:
+            result.extend(_extract_database_fields(relative, data))
+    return sorted(result, key=lambda entry: (entry.relative_file.casefold(), entry.locations, entry.entry_id))
+
+
+def recommend_skip_translation(entries: Iterable[TranslationEntry], threshold: float = 0.30) -> bool:
+    text = "\n".join(entry.source_text for entry in entries)
+    cjk = len(_CJK_RE.findall(text))
+    kana = len(_HIRAGANA_RE.findall(text)) + len(_KATAKANA_RE.findall(text))
+    latin_or_digits = len(re.findall(r"[A-Za-z0-9]", text))
+    denominator = cjk + kana + latin_or_digits
+    # Han characters occur in both Chinese and Japanese. A meaningful *share*
+    # of hiragana/katakana is therefore a Japanese signal. A small amount of
+    # kana in a predominantly Chinese project (for example plugin labels or
+    # retained names) must not force an unnecessary third-party translation.
+    kana_ratio = kana / max(1, cjk + kana + latin_or_digits)
+    if kana >= 2 and kana_ratio >= 0.02:
+        return False
+    return denominator > 0 and cjk / denominator >= threshold
+
+
+def translation_memory_key(
+    source: str,
+    target_language: str,
+    model: str,
+    prompt_version: str = PROMPT_VERSION,
+    glossary_hash: str = "",
+) -> str:
+    return _sha256("\0".join([source, target_language, model, prompt_version, glossary_hash]))
+
+
+class TranslationMemory:
+    def __init__(self, path: str | Path):
+        self.path = Path(path)
+        self.data: dict[str, Any] = {"schemaVersion": 1, "entries": {}}
+        if self.path.is_file():
+            try:
+                loaded = json.loads(self.path.read_text(encoding="utf-8"))
+                if loaded.get("schemaVersion") == 1 and isinstance(loaded.get("entries"), dict):
+                    self.data = loaded
+            except (OSError, ValueError):
+                # A corrupt cache is ignored; the original text remains the fallback.
+                pass
+
+    def get(self, key: str) -> list[str] | None:
+        item = self.data["entries"].get(key)
+        if isinstance(item, dict) and isinstance(item.get("segments"), list) and all(isinstance(v, str) for v in item["segments"]):
+            return list(item["segments"])
+        return None
+
+    def put(self, key: str, entry_id: str, source_sha256: str, segments: list[str]) -> None:
+        self.data["entries"][key] = {
+            "id": entry_id,
+            "sourceSha256": source_sha256,
+            "segments": list(segments),
+            "updatedAt": time.time(),
+        }
+
+    def save(self) -> None:
+        atomic_write_json(self.path, self.data)
+
+
+class TranslationTransport(Protocol):
+    def list_models(self, api_key: str) -> list[str]: ...
+
+    def chat(self, payload: dict[str, Any], api_key: str) -> dict[str, Any]: ...
+
+
+class DeepSeekHTTPError(TranslationError):
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+
+
+class DeepSeekTransport:
+    """Small stdlib transport; no key is persisted or printed."""
+
+    def __init__(self, base_url: str = "https://api.deepseek.com", timeout: float = 60.0):
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+
+    def _request(self, method: str, endpoint: str, api_key: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        url = self.base_url + endpoint
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
+        request = urllib.request.Request(
+            url,
+            data=body,
+            method=method,
+            headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json", "Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                raw = response.read()
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")[:500]
+            except OSError:
+                detail = "HTTP error"
+            raise DeepSeekHTTPError(exc.code, f"DeepSeek HTTP {exc.code}: {redact_text(detail)}") from exc
+        except urllib.error.URLError as exc:
+            raise TranslationError(f"DeepSeek connection failed: {redact_text(exc.reason)}") from exc
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise TranslationError("DeepSeek returned invalid JSON") from exc
+        if not isinstance(data, dict):
+            raise TranslationError("DeepSeek returned a non-object JSON response")
+        return data
+
+    def list_models(self, api_key: str) -> list[str]:
+        last_error: DeepSeekHTTPError | None = None
+        for attempt in range(3):
+            try:
+                data = self._request("GET", "/models", api_key)
+                break
+            except DeepSeekHTTPError as exc:
+                last_error = exc
+                if exc.status not in {429, 500, 503} or attempt == 2:
+                    raise
+                time.sleep(min(2**attempt, 4))
+        else:
+            raise TranslationError(str(last_error or "DeepSeek /models failed"))
+        models = data.get("data")
+        if not isinstance(models, list):
+            raise TranslationError("DeepSeek /models response has no data array")
+        result = []
+        for item in models:
+            if isinstance(item, dict) and isinstance(item.get("id"), str):
+                result.append(item["id"])
+        return sorted(set(result))
+
+    def chat(self, payload: dict[str, Any], api_key: str) -> dict[str, Any]:
+        return self._request("POST", "/chat/completions", api_key, payload)
+
+
+class FakeTransport:
+    """Deterministic offline transport used by tests and local demonstrations."""
+
+    def __init__(self, models: list[str] | None = None, responder: Callable[[dict[str, Any]], dict[str, Any]] | None = None):
+        self.models = models or ["deepseek-v4-flash"]
+        self.responder = responder or self._default_response
+        self.calls: list[dict[str, Any]] = []
+
+    def list_models(self, api_key: str) -> list[str]:
+        return list(self.models)
+
+    def chat(self, payload: dict[str, Any], api_key: str) -> dict[str, Any]:
+        self.calls.append(payload)
+        return self.responder(payload)
+
+    @staticmethod
+    def _default_response(payload: dict[str, Any]) -> dict[str, Any]:
+        request_text = payload["messages"][-1]["content"]
+        items = json.loads(request_text.split("INPUT=", 1)[1])
+        translations = []
+        for item in items:
+            translations.append({"id": item["id"], "segments": item["segments"]})
+        return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps({"translations": translations}, ensure_ascii=False)}}]}
+
+
+def choose_model(models: list[str], requested: str | None = None) -> str:
+    if requested:
+        return requested
+    if not models:
+        raise ConfigurationError("no DeepSeek model is available; specify a model manually")
+    preferred = [name for name in models if name.casefold() == "deepseek-v4-flash"]
+    if preferred:
+        return preferred[0]
+    non_reasoning = [name for name in models if "reason" not in name.casefold() and "think" not in name.casefold()]
+    return sorted(non_reasoning or models)[0]
+
+
+def _content_from_response(data: dict[str, Any]) -> tuple[str, str]:
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise TranslationError("DeepSeek response has no choices")
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        raise TranslationError("DeepSeek response choice is invalid")
+    reason = str(choice.get("finish_reason") or "")
+    if reason in {"length", "content_filter"}:
+        raise TranslationError(f"DeepSeek response was not complete: {reason}")
+    message = choice.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, list):
+        content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+    if not isinstance(content, str) or not content.strip():
+        raise TranslationError("DeepSeek response content is empty")
+    return content, reason
+
+
+def _parse_translation_json(content: str, expected_ids: set[str]) -> dict[str, list[str]]:
+    try:
+        data = json.loads(content)
+    except ValueError as exc:
+        raise TranslationError("DeepSeek JSON Output could not be parsed") from exc
+    items = data.get("translations") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        raise TranslationError("translation JSON must contain a translations array")
+    result: dict[str, list[str]] = {}
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not isinstance(item.get("segments"), list):
+            raise TranslationError("translation item must contain id and segments")
+        item_id = item["id"]
+        if item_id in result or item_id not in expected_ids:
+            raise TranslationError("translation IDs are duplicated or unexpected")
+        if not all(isinstance(segment, str) for segment in item["segments"]):
+            raise TranslationError("translation segments must be strings")
+        result[item_id] = list(item["segments"])
+    if set(result) != expected_ids:
+        raise TranslationError("translation IDs do not match the requested block")
+    return result
+
+
+def _request_batch(transport: TranslationTransport, api_key: str, model: str, target_language: str, entries: list[TranslationEntry], cancel_event=None) -> dict[str, list[str]]:
+    request_items = []
+    for entry in entries:
+        protected_segments = [protect_text(segment)[0] for segment in entry.segments]
+        request_items.append({"id": entry.entry_id, "segments": protected_segments})
+    prompt = (
+        "Translate only the supplied RPG Maker MV display text into the requested target language. "
+        "Return JSON exactly as {\"translations\":[{\"id\":string,\"segments\":string[]}]}. "
+        "Keep every protected marker unchanged and keep each segments array length unchanged. "
+        "Do not translate markers, code, paths, or tags.\n"
+        f"TARGET_LANGUAGE={target_language}\nINPUT=" + json.dumps(request_items, ensure_ascii=False)
+    )
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a constrained game-text translation engine."},
+            {"role": "user", "content": prompt},
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.1,
+        "stream": False,
+    }
+    if cancel_event is not None and cancel_event.is_set():
+        raise CancelledError("translation cancelled")
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            data = transport.chat(payload, api_key)
+            content, _ = _content_from_response(data)
+            return _parse_translation_json(content, {entry.entry_id for entry in entries})
+        except DeepSeekHTTPError as exc:
+            last_error = exc
+            if exc.status not in {429, 500, 503} or attempt == 2:
+                raise
+            time.sleep(min(2**attempt, 4))
+        except TranslationError as exc:
+            last_error = exc
+            raise
+    raise TranslationError(str(last_error or "translation request failed"))
+
+
+def apply_translations(www: str | Path, entries: list[TranslationEntry], translations: dict[str, list[str]]) -> list[TranslationFailure]:
+    root = Path(www).resolve(strict=True)
+    grouped: dict[str, list[tuple[TranslationEntry, list[str]]]] = {}
+    failures: list[TranslationFailure] = []
+    for entry in entries:
+        candidate = translations.get(entry.entry_id)
+        if candidate is None:
+            continue
+        if len(candidate) != len(entry.segments):
+            failures.append(TranslationFailure(entry.entry_id, "segment count mismatch", entry.source_text))
+            continue
+        valid = True
+        reason = ""
+        for original, translated in zip(entry.segments, candidate):
+            valid, reason = validate_placeholders(original, translated)
+            if not valid:
+                break
+        if not valid:
+            failures.append(TranslationFailure(entry.entry_id, reason, entry.source_text))
+            continue
+        grouped.setdefault(entry.relative_file, []).append((entry, candidate))
+
+    for relative, items in grouped.items():
+        path = root / Path(relative)
+        data = _load_json(path)
+        for entry, candidate in items:
+            current = [get_pointer(data, location) for location in entry.locations]
+            if _sha256("\n".join(str(value) for value in current)) != entry.source_sha256:
+                failures.append(TranslationFailure(entry.entry_id, "source changed since extraction", entry.source_text))
+                continue
+            for location, translated in zip(entry.locations, candidate):
+                set_pointer(data, location, translated)
+        if not all(failure.entry_id not in {entry.entry_id for entry, _ in items} for failure in failures):
+            # At least one entry in this file failed; the successful entries are
+            # still safe and are intentionally applied, while failed entries stay original.
+            pass
+        # Re-read failed locations from the original snapshot is unnecessary: we
+        # only set locations after validation and source checks above.
+        atomic_write_json(path, data)
+    return failures
+
+
+class TranslationService:
+    def __init__(self, progress=None, cancel_event=None):
+        self.progress = progress or (lambda *_args, **_kwargs: None)
+        self.cancel_event = cancel_event
+
+    def translate(
+        self,
+        www: str | Path,
+        target_language: str = "zh-CN",
+        model: str | None = None,
+        api_key: str | None = None,
+        transport: TranslationTransport | None = None,
+        memory_path: str | Path | None = None,
+        confirmed_third_party: bool = False,
+        force: bool = False,
+        batch_size: int = 20,
+    ) -> TranslationReport:
+        entries = extract_safe_entries(www)
+        recommended = recommend_skip_translation(entries)
+        report = TranslationReport(
+            schema_version=1,
+            source_language="zh-CN" if recommended else "unknown",
+            target_language=target_language,
+            model=model or "unselected",
+            entries_total=len(entries),
+            entries_applied=0,
+            entries_cached=0,
+            skipped_recommended=recommended and not force,
+            live_api_used=False,
+        )
+        if recommended and not force:
+            self.progress("translate", 1.0, "source is already predominantly Chinese; translation skipped")
+            return report
+        if not confirmed_third_party:
+            raise BlockedError("translation requires explicit confirmation before sending selected text to DeepSeek")
+        transport = transport or DeepSeekTransport()
+        if api_key is None:
+            api_key = os.environ.get("DEEPSEEK_API_KEY")
+        if api_key is None:
+            raise ConfigurationError("DeepSeek API key must be provided in memory or DEEPSEEK_API_KEY")
+        if model is None:
+            model = choose_model(transport.list_models(api_key))
+            report.model = model
+        memory = TranslationMemory(memory_path or (Path(www).parent / ".state" / "translation-memory.json"))
+        translations: dict[str, list[str]] = {}
+        pending: list[TranslationEntry] = []
+        for entry in entries:
+            key = translation_memory_key(entry.source_text, target_language, model)
+            cached = memory.get(key)
+            if cached is not None and len(cached) == len(entry.segments) and all(
+                validate_placeholders(original, translated)[0] for original, translated in zip(entry.segments, cached)
+            ):
+                translations[entry.entry_id] = cached
+                report.entries_cached += 1
+            else:
+                pending.append(entry)
+        for offset in range(0, len(pending), max(1, batch_size)):
+            if self.cancel_event is not None and self.cancel_event.is_set():
+                raise CancelledError("translation cancelled")
+            batch = pending[offset : offset + max(1, batch_size)]
+            try:
+                batch_translations = _request_batch(transport, api_key, model, target_language, batch, self.cancel_event)
+            except TranslationError as exc:
+                for entry in batch:
+                    report.failures.append(TranslationFailure(entry.entry_id, redact_text(str(exc)), entry.source_text))
+                continue
+            for entry in batch:
+                candidate = batch_translations.get(entry.entry_id)
+                if candidate is None or len(candidate) != len(entry.segments):
+                    report.failures.append(TranslationFailure(entry.entry_id, "missing or mismatched response entry", entry.source_text))
+                    continue
+                restored: list[str] = []
+                for original, translated in zip(entry.segments, candidate):
+                    _, original_tokens = protect_text(original)
+                    restored_segment = translated
+                    for token_index, original_token in enumerate(original_tokens):
+                        restored_segment = restored_segment.replace(f"__G2A_TOKEN_{token_index:03d}__", original_token)
+                    restored.append(restored_segment)
+                candidate = restored
+                invalid_reason = next(
+                    (reason for original, translated in zip(entry.segments, candidate) if not (ok := validate_placeholders(original, translated))[0] for reason in [ok[1]]),
+                    None,
+                )
+                if invalid_reason:
+                    report.failures.append(TranslationFailure(entry.entry_id, invalid_reason, entry.source_text))
+                    continue
+                translations[entry.entry_id] = candidate
+                memory.put(translation_memory_key(entry.source_text, target_language, model), entry.entry_id, entry.source_sha256, candidate)
+            memory.save()
+            self.progress("translate", min(1.0, (offset + len(batch)) / max(1, len(pending))), f"translated {offset + len(batch)}/{len(pending)} blocks")
+
+        apply_failures = apply_translations(www, entries, translations)
+        report.failures.extend(apply_failures)
+        report.entries_applied = len(translations) - len(apply_failures)
+        report.live_api_used = isinstance(transport, DeepSeekTransport) and bool(pending)
+        for entry in entries:
+            candidate = translations.get(entry.entry_id)
+            if candidate is None:
+                continue
+            report.diffs.append(
+                {
+                    "id": entry.entry_id,
+                    "file": entry.relative_file,
+                    "diff": "\n".join(
+                        difflib.unified_diff(entry.segments, candidate, fromfile="original", tofile="translation", lineterm="")
+                    ),
+                }
+            )
+        report_path = Path(memory_path or (Path(www).parent / ".state" / "translation-memory.json")).with_name("translation-report.json")
+        report.report_path = str(atomic_write_json(report_path, report.to_dict()))
+        self.progress("translate", 1.0, "translation complete")
+        return report
