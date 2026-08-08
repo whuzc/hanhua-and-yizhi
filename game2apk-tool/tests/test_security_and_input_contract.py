@@ -12,6 +12,7 @@ from unittest import mock
 
 from game2apk.builder import BuildService
 from game2apk.cli import build_parser, main
+from game2apk.config import build_config
 from game2apk.security import read_secret_source, sanitized_child_environment
 from game2apk.verifier import _stage_asset_check
 
@@ -89,6 +90,26 @@ class SecurityAndInputContractTests(unittest.TestCase):
         self.assertIn('android:roundIcon="@drawable/game2apk_launcher"', manifest)
         self.assertIn("<vector", icon)
         self.assertIn("pathData=", icon)
+
+    def test_update_identity_and_webview_storage_contract_are_stable(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        config = build_config()
+        self.assertEqual(config["applicationId"], "com.game2apk.xianyaoshengcanver22")
+        self.assertEqual(config["versionCode"], 3)
+        self.assertEqual(config["versionName"], "1.0.2")
+
+        gradle = (root / "templates" / "android-rpgmv" / "app" / "build.gradle").read_text(encoding="utf-8")
+        self.assertIn("com.game2apk.xianyaoshengcanver22", gradle)
+        self.assertIn("versionCode Integer.parseInt(requiredOrDefault('game2apkVersionCode', '3'))", gradle)
+        self.assertIn("versionName requiredOrDefault('game2apkVersionName', '1.0.2')", gradle)
+
+        activity = (root / "templates" / "android-rpgmv" / "app" / "src" / "main" / "java" / "com" / "game2apk" / "rpgmv" / "MainActivity.java").read_text(encoding="utf-8")
+        store = (root / "templates" / "android-rpgmv" / "app" / "src" / "main" / "java" / "com" / "game2apk" / "rpgmv" / "OverlayStateStore.java").read_text(encoding="utf-8")
+        self.assertIn("setDomStorageEnabled(true)", activity)
+        self.assertIn("appassets.androidplatform.net", activity)
+        self.assertNotRegex(activity, r"clear(?:Cache|History|FormData)|deleteAllData|deleteDatabase")
+        self.assertIn('PREFS_NAME = "game2apk.overlay.v1"', store)
+        self.assertNotRegex(store, r"clear\(\)|deleteDatabase|deleteAll")
 
 
 if __name__ == "__main__":

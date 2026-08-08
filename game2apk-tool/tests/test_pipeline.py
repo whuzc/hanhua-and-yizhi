@@ -83,6 +83,12 @@ class PipelineTests(unittest.TestCase):
         data = build_config(control=default_control_config())
         return BuildConfig(data["appName"], data["applicationId"], data["versionCode"], data["versionName"], control_config=data["control"])
 
+    def test_default_update_identity_and_version_are_monotonic(self) -> None:
+        data = build_config(control=default_control_config())
+        self.assertEqual(data["applicationId"], "com.game2apk.xianyaoshengcanver22")
+        self.assertEqual(data["versionCode"], 3)
+        self.assertEqual(data["versionName"], "1.0.2")
+
     def test_inspect_reports_mv_yep_resolution_keys_and_encryption_without_key(self) -> None:
         report = inspect_game(self.game)
         self.assertEqual(report.engine_version, "1.6.1")
@@ -328,13 +334,13 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn("android { androidResources", rendered_settings.read_text(encoding="utf-8"))
         def fake_tool(command):
             if "aapt2" in command[0]:
-                return 0, "package: name='com.game2apk.xianyaoshengcanver22' versionCode='2' versionName='1.0.1'\napplication: label='Demo' icon='@drawable/game2apk_launcher'\ndebuggable=false"
+                return 0, "package: name='com.game2apk.xianyaoshengcanver22' versionCode='3' versionName='1.0.2'\napplication: label='Demo' icon='@drawable/game2apk_launcher'\ndebuggable=false"
             if "apksigner" in command[0]:
                 return 0, "Verified using v2 scheme\nSigner #1 certificate SHA-256 digest: AA:BB"
             return 0, "Verification successful"
 
         with mock.patch("game2apk.verifier._run", side_effect=fake_tool):
-            verified = VerificationService().verify(result.apk_path, toolchain, result.started_at_utc, expected_application_id=self._config().application_id, expected_version_code=2)
+            verified = VerificationService().verify(result.apk_path, toolchain, result.started_at_utc, expected_application_id=self._config().application_id, expected_version_code=3)
         self.assertTrue(verified.passed)
         self.assertTrue(verified.signature_candidate)
         self.assertFalse(verified.device["verified"])

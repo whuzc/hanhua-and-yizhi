@@ -16,11 +16,13 @@ android {
     }
 
     defaultConfig {
-        applicationId requiredOrDefault('game2apkApplicationId', 'com.game2apk.template.rpgmv')
+        // Keep the standalone template on the same package identity as the
+        // generated app so a rebuild can be installed as an update.
+        applicationId requiredOrDefault('game2apkApplicationId', 'com.game2apk.xianyaoshengcanver22')
         minSdk 24
         targetSdk 36
-        versionCode Integer.parseInt(requiredOrDefault('game2apkVersionCode', '2'))
-        versionName requiredOrDefault('game2apkVersionName', '1.0.1')
+        versionCode Integer.parseInt(requiredOrDefault('game2apkVersionCode', '3'))
+        versionName requiredOrDefault('game2apkVersionName', '1.0.2')
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
 
@@ -37,7 +39,7 @@ android {
     }
 
     androidResources {
-        noCompress += ['rpgmvp', 'rpgmvo', 'rpgmvm', 'ogg', 'm4a', 'webm']
+        noCompress += ['rpgmvp', 'rpgmvo', 'rpgmvm', 'ogg', 'm4a', 'mp3', 'wav', 'webm']
     }
 
     testOptions {

@@ -9,12 +9,12 @@ $env:PYTHONPATH = (Resolve-Path .\game2apk-tool\src).Path
 python .\game2apk-tool\scripts\game2apk.py inspect ".\仙肴圣餐超魔改 Ver22"
 python .\game2apk-tool\scripts\game2apk.py run ".\仙肴圣餐超魔改 Ver22" `
   --template .\game2apk-tool\templates\android-rpgmv `
-  --version-code 2 --version-name 1.0.1
+  --version-code 3 --version-name 1.0.2
 ```
 
 签名密码默认优先读取稳定 `applicationId` 对应的 Windows DPAPI 凭据。首次创建或 standalone 签名只能使用 `--password-env NAME`、`--password-stdin` 或 `--password-prompt`；`run` 对应为 `--sign-password-env NAME`、`--sign-password-stdin` 或 `--sign-password-prompt`。DeepSeek 只允许 `--api-key-env NAME`、`--api-key-stdin` 或 `--api-key-prompt`，其中 argv 只出现环境变量名，不出现秘密值。旧的 `--api-key VALUE`、`--password VALUE`、`--sign-password VALUE` 及等价 raw-secret 参数会被拒绝。
 
-本次目标 APK 固定为 `com.game2apk.xianyaoshengcanver22`、versionCode `2`、versionName `1.0.1`。稳定 keystore 位于 `.state/signing/<applicationId>/`，密码不写入日志、报告、APK、dist 或子进程 argv。目标游戏已汉化时翻译阶段应跳过；回归测试只使用 `FakeTransport`，不会调用真实 DeepSeek。
+本次更新目标 APK 固定为 `com.game2apk.xianyaoshengcanver22`、versionCode `3`、versionName `1.0.2`。稳定 keystore 位于 `.state/signing/<applicationId>/`，密码不写入日志、报告、APK、dist 或子进程 argv。覆盖安装必须继续使用同一 applicationId、同一签名证书，并使用 `adb install -r`；不要卸载或清除应用数据，否则 WebView 存档无法保留。详见 `docs/storage-and-upgrade.md`。
 
 ## Android 输入契约
 

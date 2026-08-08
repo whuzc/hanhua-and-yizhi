@@ -22,8 +22,29 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
   'use strict';
   var bridge = global.Game2ApkInput = global.Game2ApkInput || {};
   bridge.configUrl = 'game2apk-config.json';
+  bridge._resumeAudioContext = function (context) {
+    if (!context || typeof context.resume !== 'function' || context.state !== 'suspended') return;
+    try {
+      var result = context.resume();
+      if (result && typeof result.catch === 'function') result.catch(function () {});
+    } catch (_) {}
+  };
+  bridge.unlockAudio = function () {
+    var webAudio = global.WebAudio;
+    if (webAudio && webAudio._context) bridge._resumeAudioContext(webAudio._context);
+    return true;
+  };
+  bridge.requestExit = function () {
+    try {
+      global.location.href = 'game2apk://exit';
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
   bridge._keyEvent = function (keyCode, type) {
     if (!global.Input) return false;
+    if (type !== 'up') bridge.unlockAudio();
     var handler = type === 'up' ? global.Input._onKeyUp : global.Input._onKeyDown;
     if (typeof handler !== 'function') return false;
     handler.call(global.Input, { keyCode: Number(keyCode), which: Number(keyCode), preventDefault: function () {} });
@@ -32,6 +53,30 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
   bridge.keyDown = function (keyCode) { return bridge._keyEvent(keyCode, 'down'); };
   bridge.keyUp = function (keyCode) { return bridge._keyEvent(keyCode, 'up'); };
   bridge.getConfig = function () { return global.GAME2APK_CONFIG || null; };
+  bridge.installExitHook = function () {
+    var manager = global.SceneManager;
+    if (manager && typeof manager.exit === 'function' && !manager._game2apkExitHook) {
+      manager.exit = function () { return bridge.requestExit(); };
+      manager._game2apkExitHook = true;
+    }
+    if (typeof global.close === 'function' && !global._game2apkCloseHook) {
+      global.close = function () { return bridge.requestExit(); };
+      global._game2apkCloseHook = true;
+    }
+    return Boolean(manager && manager._game2apkExitHook);
+  };
+  if (global.document && global.document.addEventListener) {
+    global.document.addEventListener('touchstart', bridge.unlockAudio, { passive: true });
+    global.document.addEventListener('pointerdown', bridge.unlockAudio, { passive: true });
+    global.document.addEventListener('keydown', bridge.unlockAudio, { passive: true });
+  }
+  bridge.installExitHook();
+  if (global.setTimeout) {
+    (function retryExitHook(attempts) {
+      if (bridge.installExitHook() || attempts <= 0) return;
+      global.setTimeout(function () { retryExitHook(attempts - 1); }, 50);
+    }(40));
+  }
   global.game2apkInputBridge = bridge;
 }(window));
 """
@@ -92,4 +137,3 @@ def patch_staged_www(staged_www: str | Path, build_config: BuildConfig | dict) -
     config_path = root / "game2apk-config.json"
     write_android_config(config_path, config_data)
     return {"index": str(index_path), "bridge": str(bridge_path), "config": str(config_path), "injectionCount": 1}
-

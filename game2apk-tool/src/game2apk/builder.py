@@ -18,7 +18,7 @@ from .models import BuildConfig, BuildResult, StageManifest, ToolchainInfo
 from .security import atomic_write_text, now_utc, redact_text, require_within, sanitized_child_environment
 
 
-NO_COMPRESS_EXTENSIONS = ("rpgmvp", "rpgmvo", "rpgmvm", "ogg", "m4a", "webm")
+NO_COMPRESS_EXTENSIONS = ("rpgmvp", "rpgmvo", "rpgmvm", "ogg", "m4a", "mp3", "wav", "webm")
 
 
 def _has_non_ascii(path: str | Path) -> bool:

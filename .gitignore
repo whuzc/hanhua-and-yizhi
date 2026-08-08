@@ -21,3 +21,8 @@ dist/*.aab
 *.keystore
 *.jks
 *.rpgsave
+
+# Gradle build caches and generated outputs
+.gradle/
+**/.gradle/
+**/build/

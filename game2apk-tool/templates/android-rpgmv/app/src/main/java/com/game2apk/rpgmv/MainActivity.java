@@ -27,6 +27,10 @@ import java.nio.charset.StandardCharsets;
 public final class MainActivity extends Activity {
     private static final String TAG = "Game2ApkRuntime";
     private static final String ASSET_HOST = "appassets.androidplatform.net";
+    private static final String EXIT_SCHEME = "game2apk";
+    // This URL is part of the save-data contract. Keep the asset origin
+    // stable across release updates so WebView's localStorage remains the
+    // same store.
     private static final String START_URL =
             "https://appassets.androidplatform.net/assets/www/index.html";
 
@@ -79,8 +83,12 @@ public final class MainActivity extends Activity {
     private void configureWebView(WebView target) {
         WebSettings settings = target.getSettings();
         settings.setJavaScriptEnabled(true);
+        // RPG Maker MV saves use DOM localStorage. Do not replace this with a
+        // temporary/session store and do not clear WebView data on startup.
         settings.setDomStorageEnabled(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
+        // MV uses WebAudio and HTML media for BGM/SE. The injected bridge
+        // resumes a suspended AudioContext after the first real gesture.
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
         settings.setAllowFileAccessFromFileURLs(false);
@@ -186,6 +194,9 @@ public final class MainActivity extends Activity {
 
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+            if (handleExitRequest(request.getUrl())) {
+                return true;
+            }
             if (isInternalAsset(request.getUrl())) {
                 return false;
             }
@@ -195,6 +206,9 @@ public final class MainActivity extends Activity {
 
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, String url) {
+            if (handleExitRequest(Uri.parse(url))) {
+                return true;
+            }
             if (isInternalAsset(Uri.parse(url))) {
                 return false;
             }
@@ -213,6 +227,9 @@ public final class MainActivity extends Activity {
         @Override
         public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
             super.onPageStarted(view, url, favicon);
+            if (handleExitRequest(Uri.parse(url))) {
+                return;
+            }
             if (isInternalAsset(Uri.parse(url))) {
                 if (overlay != null) {
                     overlay.releaseAllInput();
@@ -221,6 +238,20 @@ public final class MainActivity extends Activity {
                     inputBridge.setPageReady(false);
                 }
             }
+        }
+
+        private boolean handleExitRequest(Uri uri) {
+            if (uri == null || !EXIT_SCHEME.equalsIgnoreCase(uri.getScheme())
+                    || !"exit".equalsIgnoreCase(uri.getHost())) {
+                return false;
+            }
+            Log.i(TAG, "game requested application exit");
+            if (android.os.Build.VERSION.SDK_INT >= 21) {
+                finishAndRemoveTask();
+            } else {
+                finish();
+            }
+            return true;
         }
     }
 
