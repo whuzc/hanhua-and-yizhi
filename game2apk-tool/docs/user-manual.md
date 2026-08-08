@@ -1,6 +1,6 @@
 # 用户手册
 
-当前发布候选为 versionCode `6`、versionName `1.1.0`，从 5/1.0.4 原地升级；安装更新时不要卸载或清除数据。
+当前发布候选为 versionCode `7`、versionName `1.2.0`，从 6/1.1.0 原地升级；安装更新时不要卸载或清除数据。
 
 ## 工作流
 
@@ -28,8 +28,10 @@ python .\scripts\game2apk.py --help
 powershell -ExecutionPolicy Bypass -File .\scripts\build-portable.ps1
 ```
 
-Android 更新候选需确认 applicationId `com.game2apk.xianyaoshengcanver22`、versionCode 6、versionName 1.1.0、同一证书、非 debuggable、无 INTERNET、默认 icon 非空、zipalign/apksigner 通过、assets 严格对账且无 save/secret/keystore。覆盖安装只允许 `adb install -r`；禁止卸载和清数据。WebView 存档保留规则见 `docs/storage-and-upgrade.md`；历史验收证据见 `docs/06-security-remediation-and-rebuild.md`。
+Android 更新候选需确认 applicationId `com.game2apk.xianyaoshengcanver22`、versionCode 7、versionName 1.2.0、同一证书、非 debuggable、无 INTERNET、默认 icon 非空、zipalign/apksigner 通过、assets 严格对账且无 save/secret/keystore。覆盖安装只允许 `adb install -r`；禁止卸载和清数据。WebView 存档保留规则见 `docs/storage-and-upgrade.md`；历史验收证据见 `docs/06-security-remediation-and-rebuild.md`。
 
 ### 内置作弊器
 
 右上角“作弊”按钮打开面板，可增加金币、修改角色标准属性与经验、开启无敌、进入 Map136“事件回想”并在离开后返回原地点，以及打开包含数据库物品/武器/防具的免费商店。免费商店只提示按需购买，不限制购买数量；短时间大量购买可能导致游戏卡顿或崩溃。高级页只开放已审计白名单变量（淫乱、开发经验、感度、开发度/持久度、淫臭、发情值、媚药侵染度及回想辅助变量），不开放全部剧情开关和内部控制变量。
+
+无敌会持续将操纵角色的 HP、攻击和防御维持在高值；关闭时只撤销工具增加的参数增量，并按关闭瞬间的当前自然 HP 限制到新的最大 HP，不覆盖无敌期间的升级、装备或其他参数变化。战斗面板中的“战斗胜利/战斗失败”按钮只在战斗场景且战斗尚未结束时启用，分别调用 MV 原生胜利奖励/公共事件流程和失败/可败北规则。

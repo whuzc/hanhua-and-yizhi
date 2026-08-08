@@ -93,7 +93,8 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
      page, so it uses MV's own save/runtime objects and never touches files. */
   (function installCheat() {
     var cheat = global.Game2ApkCheat = global.Game2ApkCheat || {};
-    cheat.state = cheat.state || { god: false, freeShop: false, recall: null };
+    cheat.state = cheat.state || { god: false, freeShop: false, recall: null, godSnapshot: null };
+    cheat.state.godSnapshot = cheat.state.godSnapshot || null;
     cheat.recallMapIds = [136, 97]; // 136 = 正式“事件回想”; 97 = test map
     cheat.customFields = [
       [600, '开发经验·淫乱'], [664, '淫乱 STUP'], [1402, 'ステEXP·淫乱'], [616, '卖春经验 STUP'],
@@ -131,16 +132,91 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
       for (var i = 0; i < cheat.customFields.length; i++) { var id = cheat.customFields[i][0], e = document.getElementById('g2a-var-' + id); if (e) $gameVariables.setValue(id, clamp(e.value, 0, 999999)); }
       cheat.refresh();
     };
-    cheat.toggleGod = function (on) { cheat.state.god = !!on; cheat.installGod(); cheat.refresh(); };
+    cheat.godValue = 999999;
+    cheat.actorKey = function (a) { return a && a.actorId ? String(a.actorId()) : ''; };
+    cheat.captureGodSnapshot = function () {
+      if (cheat.state.godSnapshot) return;
+      cheat.state.godSnapshot = {};
+      actors().forEach(function (a) {
+        var key = cheat.actorKey(a); if (!key) return;
+        var plus = a._paramPlus || [];
+        cheat.state.godSnapshot[key] = { naturalHp: a.hp, godHp: null, paramBase: [plus[0] || 0, plus[2] || 0, plus[3] || 0], paramDelta: [0, 0, 0] };
+        [0, 2, 3].forEach(function (p, i) { cheat.state.godSnapshot[key].paramDelta[i] = Math.max(0, cheat.godValue - (plus[p] || 0)); });
+      });
+    };
+    cheat.ensureGodEntry = function (a) {
+      if (!cheat.state.godSnapshot) return null;
+      var key = cheat.actorKey(a), entry = cheat.state.godSnapshot[key];
+      if (!entry) {
+        var plus = a._paramPlus || [];
+        entry = cheat.state.godSnapshot[key] = { naturalHp: a.hp, godHp: null, paramBase: [plus[0] || 0, plus[2] || 0, plus[3] || 0], paramDelta: [0, 0, 0] };
+        [0, 2, 3].forEach(function (p, i) { entry.paramDelta[i] = Math.max(0, cheat.godValue - (plus[p] || 0)); });
+      }
+      return entry;
+    };
+    cheat.restoreGodSnapshot = function () {
+      var snap = cheat.state.godSnapshot; if (!snap) return;
+      actors().forEach(function (a) {
+        var s = snap[cheat.actorKey(a)]; if (!s) return;
+        var hp = typeof s.naturalHp === 'number' ? s.naturalHp : a.hp, plus = a._paramPlus || [];
+        [0, 2, 3].forEach(function (p, i) { plus[p] = Math.max(0, (plus[p] || 0) - (s.paramDelta[i] || 0)); });
+        a._paramPlus = plus;
+        if (a.refresh) a.refresh();
+        if (a.setHp) a.setHp(clamp(hp, 0, a.mhp));
+      });
+      cheat.state.godSnapshot = null;
+    };
+    cheat.maintainGod = function (actor) {
+      if (!cheat.state.god || !actor || !actor.isActor || !actor.isActor()) return;
+      if (!actor._paramPlus) actor._paramPlus = [0, 0, 0, 0, 0, 0, 0, 0];
+      var entry = cheat.ensureGodEntry(actor); if (!entry) return;
+      // `_hp` is written directly below, so any value observed between two
+      // maintenance passes came from the game (heal, scripted damage, or a
+      // level/maximum-HP change). Preserve that natural value for restoration.
+      if (entry.godHp !== null && actor._hp !== entry.godHp) entry.naturalHp = actor._hp;
+      // Keep only the requested combat values elevated; the snapshot makes
+      // this reversible when the toggle is switched off.
+      [0, 2, 3].forEach(function (p, i) {
+        var target = (entry.paramBase[i] || 0) + (entry.paramDelta[i] || 0);
+        actor._paramPlus[p] = Math.max(actor._paramPlus[p] || 0, target);
+      });
+      actor._hp = actor.mhp;
+      entry.godHp = actor._hp;
+    };
+    cheat.toggleGod = function (on) {
+      on = !!on;
+      if (on && !cheat.state.god) { cheat.captureGodSnapshot(); cheat.state.god = true; }
+      else if (!on && cheat.state.god) { cheat.state.god = false; cheat.restoreGodSnapshot(); }
+      cheat.installGod(); cheat.refresh();
+    };
     cheat.installGod = function () {
-      if (!global.Game_Battler || !Game_Battler.prototype.gainHp || Game_Battler.prototype._game2apkGodHook) return;
-      var original = Game_Battler.prototype.gainHp;
-      Game_Battler.prototype.gainHp = function (value) {
-        if (cheat.state.god && this.isActor && this.isActor() && value < 0) { this.setHp(this.mhp); return; }
-        original.call(this, value);
-        if (cheat.state.god && this.isActor && this.isActor() && this.hp <= 0) { this.setHp(this.mhp); this.removeState && this.removeState(1); }
-      };
-      Game_Battler.prototype._game2apkGodHook = true;
+      if (global.Game_Battler && Game_Battler.prototype.gainHp && !Game_Battler.prototype._game2apkGodHook) {
+        var original = Game_Battler.prototype.gainHp;
+        Game_Battler.prototype.gainHp = function (value) {
+          if (cheat.state.god && this.isActor && this.isActor() && value < 0) { cheat.maintainGod(this); return; }
+          original.call(this, value);
+          if (cheat.state.god && this.isActor && this.isActor()) cheat.maintainGod(this);
+        };
+        Game_Battler.prototype._game2apkGodHook = true;
+      }
+      if (global.Game_Actor && Game_Actor.prototype.refresh && !Game_Actor.prototype._game2apkGodRefreshHook) {
+        var refresh = Game_Actor.prototype.refresh;
+        Game_Actor.prototype.refresh = function () {
+          refresh.apply(this, arguments);
+          cheat.maintainGod(this);
+        };
+        Game_Actor.prototype._game2apkGodRefreshHook = true;
+      }
+      if (global.BattleManager && BattleManager.update && !BattleManager._game2apkGodUpdateHook) {
+        var update = BattleManager.update;
+      BattleManager.update = function () {
+          if (cheat.state.god) actors().forEach(cheat.maintainGod);
+          update.apply(this, arguments);
+          if (cheat.state.god) actors().forEach(cheat.maintainGod);
+          cheat.refreshBattleControls();
+        };
+        BattleManager._game2apkGodUpdateHook = true;
+      }
     };
     cheat.installRecall = function () {
       if (!global.Game_Player || !Game_Player.prototype.reserveTransfer || Game_Player.prototype._game2apkRecallHook) return;
@@ -178,7 +254,32 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
       alert('免费商店：请按需购买，短时间大量购买可能导致游戏卡顿或崩溃。购买数量不设上限。');
       cheat.state.freeShop = true; cheat.close(); SceneManager.push(Scene_Shop); SceneManager.prepareNextScene(goods, true);
     };
+    cheat.isBattleActive = function () {
+      var bm = global.BattleManager, sm = global.SceneManager, scene = sm && sm._scene;
+      return !!(bm && scene && global.Scene_Battle && scene instanceof global.Scene_Battle &&
+        bm._phase && bm._phase !== 'battleEnd' && bm._phase !== 'aborting');
+    };
+    cheat.forceBattleResult = function (result) {
+      if (!cheat.isBattleActive()) { alert('该按钮仅能在战斗进行中使用。'); return false; }
+      var bm = global.BattleManager;
+      if (bm.isBattleEnd && bm.isBattleEnd()) return false;
+      if (result === 0 && typeof bm.processVictory === 'function') {
+        bm.processVictory();
+      } else if (result === 2 && typeof bm.processDefeat === 'function') {
+        // Native updateBattleEnd uses all-dead to choose game-over/revive.  Set
+        // HP to zero first so the normal defeat, callback, and canLose rules run.
+        if (global.$gameParty && $gameParty.members) $gameParty.members().forEach(function (a) { if (a.setHp) a.setHp(0); });
+        bm.processDefeat();
+      } else return false;
+      cheat.close();
+      return true;
+    };
+    cheat.refreshBattleControls = function () {
+      var active = cheat.isBattleActive();
+      ['g2a-win', 'g2a-lose'].forEach(function (id) { var e = document.getElementById(id); if (e) e.disabled = !active; });
+    };
     cheat.refresh = function () {
+      cheat.refreshBattleControls();
       var a = selectedActor(); if (!a) return;
       var vals = { level:a.level, exp:a.currentExp ? a.currentExp() : 0, hp:a.hp, mp:a.mp, atk:a.param(2), def:a.param(3), mat:a.param(4), mdf:a.param(5), agi:a.param(6), luk:a.param(7) };
       Object.keys(vals).forEach(function(k){setText('g2a-'+k, vals[k]);});
@@ -189,12 +290,12 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
     cheat.toggle = function () {
       var old = document.getElementById('game2apk-cheat'); if (old) { old.remove(); return; }
       var p = document.createElement('div'); p.id='game2apk-cheat'; p.style.cssText='position:fixed;left:4%;top:4%;width:92%;max-height:88%;overflow:auto;z-index:2147483647;background:rgba(16,18,28,.96);color:#fff;padding:14px;border:2px solid #8ab4ff;border-radius:10px;font:14px sans-serif;box-sizing:border-box';
-      var a=actors(), h='<div style="font-size:18px;font-weight:bold">内置作弊器 <button id="g2a-close" style="float:right">关闭</button></div><p style="color:#ffd27f">修改后建议手动保存。高级变量仅开放白名单，数值限制为 0～999999。</p><button id="g2a-gold">获得 999999999 金币</button> <button id="g2a-shop">免费商店</button><label style="margin-left:12px"><input id="g2a-god" type="checkbox"> 无敌（锁定角色HP）</label><hr><label>角色 <select id="g2a-actor">'+a.map(function(x,i){return '<option value="'+i+'">'+(x.name?x.name():('角色'+i))+'</option>';}).join('')+'</select></label><div id="g2a-fields"></div><button id="g2a-apply">应用角色数值</button><h4>高级/自定义数值（白名单）</h4><div id="g2a-custom"></div><button id="g2a-apply-custom">应用高级数值</button><hr><button id="g2a-recall">传送到正式回想房间（Map136）</button><small> 离开回想房间会自动返回进入前的位置。</small>';
+      var a=actors(), h='<div style="font-size:18px;font-weight:bold">内置作弊器 <button id="g2a-close" style="float:right">关闭</button></div><p style="color:#ffd27f">修改后建议手动保存。高级变量仅开放白名单，数值限制为 0～999999。</p><button id="g2a-gold">获得 999999999 金币</button> <button id="g2a-shop">免费商店</button><label style="margin-left:12px"><input id="g2a-god" type="checkbox"> 无敌（HP/攻击/防御持续提升，可恢复）</label><hr><label>角色 <select id="g2a-actor">'+a.map(function(x,i){return '<option value="'+i+'">'+(x.name?x.name():('角色'+i))+'</option>';}).join('')+'</select></label><div id="g2a-fields"></div><button id="g2a-apply">应用角色数值</button><h4>高级/自定义数值（白名单）</h4><div id="g2a-custom"></div><button id="g2a-apply-custom">应用高级数值</button><hr><button id="g2a-recall">传送到正式回想房间（Map136）</button><small> 离开回想房间会自动返回进入前的位置。</small><hr><div><b>战斗作弊（仅战斗中可用）</b> <button id="g2a-win" disabled>战斗胜利</button> <button id="g2a-lose" disabled>战斗失败</button><small> 强制调用游戏原生战斗结束、奖励/失败及公共事件流程。</small></div>';
       p.innerHTML=h; document.body.appendChild(p);
       var fields=[['level','等级'],['exp','经验'],['hp','HP'],['mp','MP'],['atk','攻击'],['def','防御'],['mat','魔攻'],['mdf','魔防'],['agi','敏捷'],['luk','幸运']];
       document.getElementById('g2a-fields').innerHTML=fields.map(function(f){return '<label style="display:inline-block;width:32%;margin:3px">'+f[1]+' <input id="g2a-'+f[0]+'" type="number" min="0" max="999999" style="width:75px"></label>';}).join('');
       document.getElementById('g2a-custom').innerHTML=cheat.customFields.map(function(f){return '<label style="display:inline-block;width:48%;margin:3px">'+f[1]+' <input id="g2a-var-'+f[0]+'" type="number" min="0" max="999999" style="width:90px"></label>';}).join('');
-      document.getElementById('g2a-close').onclick=cheat.close; document.getElementById('g2a-gold').onclick=cheat.addGold; document.getElementById('g2a-shop').onclick=cheat.openShop; document.getElementById('g2a-god').onchange=function(){cheat.toggleGod(this.checked);}; document.getElementById('g2a-apply').onclick=cheat.applyActor; document.getElementById('g2a-apply-custom').onclick=cheat.applyCustom; document.getElementById('g2a-actor').onchange=cheat.refresh; document.getElementById('g2a-recall').onclick=cheat.toRecall;
+      document.getElementById('g2a-close').onclick=cheat.close; document.getElementById('g2a-gold').onclick=cheat.addGold; document.getElementById('g2a-shop').onclick=cheat.openShop; document.getElementById('g2a-god').onchange=function(){cheat.toggleGod(this.checked);}; document.getElementById('g2a-apply').onclick=cheat.applyActor; document.getElementById('g2a-apply-custom').onclick=cheat.applyCustom; document.getElementById('g2a-actor').onchange=cheat.refresh; document.getElementById('g2a-recall').onclick=cheat.toRecall; document.getElementById('g2a-win').onclick=function(){cheat.forceBattleResult(0);}; document.getElementById('g2a-lose').onclick=function(){cheat.forceBattleResult(2);};
       p.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:false}); p.addEventListener('pointerdown',function(e){e.stopPropagation();}); cheat.refresh();
     };
     if (global.setTimeout) (function retry(n){ cheat.installGod(); cheat.installRecall(); cheat.installShop(); if(n>0) setTimeout(function(){retry(n-1);},250); }(40));

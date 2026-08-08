@@ -123,8 +123,8 @@ def _config(args) -> BuildConfig:
 def _common_build_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--app-name", default="仙肴圣餐超魔改 Ver22")
     parser.add_argument("--application-id", default="com.game2apk.xianyaoshengcanver22")
-    parser.add_argument("--version-code", type=int, default=6)
-    parser.add_argument("--version-name", default="1.1.0")
+    parser.add_argument("--version-code", type=int, default=7)
+    parser.add_argument("--version-name", default="1.2.0")
     parser.add_argument("--icon")
 
 

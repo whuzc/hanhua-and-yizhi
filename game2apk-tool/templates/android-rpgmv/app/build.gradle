@@ -21,8 +21,8 @@ android {
         applicationId requiredOrDefault('game2apkApplicationId', 'com.game2apk.xianyaoshengcanver22')
         minSdk 24
         targetSdk 36
-        versionCode Integer.parseInt(requiredOrDefault('game2apkVersionCode', '6'))
-        versionName requiredOrDefault('game2apkVersionName', '1.1.0')
+        versionCode Integer.parseInt(requiredOrDefault('game2apkVersionCode', '7'))
+        versionName requiredOrDefault('game2apkVersionName', '1.2.0')
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
 

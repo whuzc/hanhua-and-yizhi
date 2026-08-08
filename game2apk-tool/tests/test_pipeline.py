@@ -96,8 +96,8 @@ class PipelineTests(unittest.TestCase):
     def test_default_update_identity_and_version_are_monotonic(self) -> None:
         data = build_config(control=default_control_config())
         self.assertEqual(data["applicationId"], "com.game2apk.xianyaoshengcanver22")
-        self.assertEqual(data["versionCode"], 6)
-        self.assertEqual(data["versionName"], "1.1.0")
+        self.assertEqual(data["versionCode"], 7)
+        self.assertEqual(data["versionName"], "1.2.0")
 
     def test_inspect_reports_mv_yep_resolution_keys_and_encryption_without_key(self) -> None:
         report = inspect_game(self.game)
@@ -351,13 +351,13 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn("android { androidResources", rendered_settings.read_text(encoding="utf-8"))
         def fake_tool(command):
             if "aapt2" in command[0]:
-                return 0, "package: name='com.game2apk.xianyaoshengcanver22' versionCode='6' versionName='1.1.0'\napplication: label='Demo' icon='@drawable/game2apk_launcher'\ndebuggable=false"
+                return 0, "package: name='com.game2apk.xianyaoshengcanver22' versionCode='7' versionName='1.2.0'\napplication: label='Demo' icon='@drawable/game2apk_launcher'\ndebuggable=false"
             if "apksigner" in command[0]:
                 return 0, "Verified using v2 scheme\nSigner #1 certificate SHA-256 digest: AA:BB"
             return 0, "Verification successful"
 
         with mock.patch("game2apk.verifier._run", side_effect=fake_tool):
-            verified = VerificationService().verify(result.apk_path, toolchain, result.started_at_utc, expected_application_id=self._config().application_id, expected_version_code=6)
+            verified = VerificationService().verify(result.apk_path, toolchain, result.started_at_utc, expected_application_id=self._config().application_id, expected_version_code=7)
         self.assertTrue(verified.passed)
         self.assertTrue(verified.signature_candidate)
         self.assertFalse(verified.device["verified"])
