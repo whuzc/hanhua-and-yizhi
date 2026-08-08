@@ -38,6 +38,14 @@ public final class RpgInputBridge implements KeySink {
         evaluate("keyUp", keyCode);
     }
 
+    @Override
+    public void openCheatPanel() {
+        if (!pageReady) return;
+        webView.evaluateJavascript(
+                "window.Game2ApkCheat&&window.Game2ApkCheat.toggle&&window.Game2ApkCheat.toggle();",
+                null);
+    }
+
     private void evaluate(String method, int keyCode) {
         if (!pageReady) {
             return;

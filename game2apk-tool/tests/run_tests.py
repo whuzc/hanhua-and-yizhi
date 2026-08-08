@@ -17,6 +17,6 @@ if __name__ == "__main__":
         print("node is required for the MV frame sampling regression", file=sys.stderr)
         raise SystemExit(1)
     node_results = []
-    for script in ("mv_input_frame_regression.js", "mv_touch_regression.js", "mv_audio_exit_regression.js", "mv_encrypted_audio_extension_regression.js"):
+    for script in ("mv_input_frame_regression.js", "mv_touch_regression.js", "mv_audio_exit_regression.js", "mv_encrypted_audio_extension_regression.js", "mv_cheat_regression.js"):
         node_results.append(subprocess.run([node, str(ROOT / "tests" / script)], text=True).returncode)
     raise SystemExit(0 if passed and all(code == 0 for code in node_results) else 1)

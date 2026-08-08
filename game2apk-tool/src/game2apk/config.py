@@ -55,8 +55,8 @@ def build_config(
     # Keep these defaults monotonic with the released 1.0.3 build. Android
     # accepts an in-place update only when the package/signing identity stays
     # the same and versionCode increases.
-    version_code: int = 5,
-    version_name: str = "1.0.4",
+    version_code: int = 6,
+    version_name: str = "1.1.0",
     icon_path: str | None = None,
     control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:

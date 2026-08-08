@@ -24,6 +24,8 @@ import java.util.Map;
 public final class OverlayView extends View {
     private static final NormalizedRect VISIBLE_HIDE_HANDLE =
             NormalizedRect.fromXYWH(0.94f, 0.02f, 0.055f, 0.065f);
+    private static final NormalizedRect CHEAT_HANDLE =
+            NormalizedRect.fromXYWH(0.87f, 0.02f, 0.065f, 0.065f);
     private static final NormalizedRect HIDDEN_RECOVERY_HANDLE =
             NormalizedRect.fromXYWH(0.94f, 0.90f, 0.055f, 0.065f);
 
@@ -35,6 +37,7 @@ public final class OverlayView extends View {
         BUTTON,
         HIDE_HANDLE,
         RECOVERY_HANDLE,
+        CHEAT_HANDLE,
         PASSIVE,
         THREE_FINGER
     }
@@ -43,6 +46,7 @@ public final class OverlayView extends View {
         BUTTON,
         HIDE_HANDLE,
         RECOVERY_HANDLE,
+        CHEAT_HANDLE,
         GAME
     }
 
@@ -164,6 +168,7 @@ public final class OverlayView extends View {
             }
         }
         drawHandle(canvas, VISIBLE_HIDE_HANDLE, "-");
+        drawHandle(canvas, CHEAT_HANDLE, "作弊");
     }
 
     private void drawButton(Canvas canvas, NormalizedRect normalized, String label) {
@@ -349,6 +354,8 @@ public final class OverlayView extends View {
             if (visibility.restoreByHandle()) {
                 stateStore.saveHidden(false);
             }
+        } else if (kind == PointerKind.CHEAT_HANDLE) {
+            keySink.openCheatPanel();
         }
         TwoFingerTapGestureStateMachine.Outcome outcome = twoFinger.onPointerUp(pointerId, now);
         if (outcome == TwoFingerTapGestureStateMachine.Outcome.CANCEL) {
@@ -473,6 +480,8 @@ public final class OverlayView extends View {
             if (visibility.restoreByHandle()) {
                 stateStore.saveHidden(false);
             }
+        } else if (kind == PointerKind.CHEAT_HANDLE) {
+            keySink.openCheatPanel();
         }
         visibility.onPointerUp(pointerId);
         tickVisibility(now);
@@ -502,6 +511,9 @@ public final class OverlayView extends View {
                 break;
             case RECOVERY_HANDLE:
                 pointerKinds.put(pointerId, PointerKind.RECOVERY_HANDLE);
+                break;
+            case CHEAT_HANDLE:
+                pointerKinds.put(pointerId, PointerKind.CHEAT_HANDLE);
                 break;
             case GAME:
             default:
@@ -548,6 +560,9 @@ public final class OverlayView extends View {
         }
         if (VISIBLE_HIDE_HANDLE.contains(x, y)) {
             return new Hit(HitKind.HIDE_HANDLE, null);
+        }
+        if (CHEAT_HANDLE.contains(x, y)) {
+            return new Hit(HitKind.CHEAT_HANDLE, null);
         }
         for (Game2ApkConfig.ButtonConfig button : config.buttons) {
             NormalizedRect rect = layout.buttonRect(button.id);
