@@ -31,7 +31,15 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
   };
   bridge.unlockAudio = function () {
     var webAudio = global.WebAudio;
-    if (webAudio && webAudio._context) bridge._resumeAudioContext(webAudio._context);
+    if (webAudio && webAudio._context) {
+      bridge._resumeAudioContext(webAudio._context);
+      // MV's own unlock handler primes a zero-length source.  Keep that
+      // step for Android WebView/Bluetooth routes as well; it is harmless
+      // when the context is already unlocked.
+      if (typeof webAudio._onTouchStart === 'function') {
+        try { webAudio._onTouchStart(); } catch (_) {}
+      }
+    }
     return true;
   };
   bridge.requestExit = function () {
@@ -69,6 +77,10 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
     global.document.addEventListener('touchstart', bridge.unlockAudio, { passive: true });
     global.document.addEventListener('pointerdown', bridge.unlockAudio, { passive: true });
     global.document.addEventListener('keydown', bridge.unlockAudio, { passive: true });
+    global.document.addEventListener('visibilitychange', bridge.unlockAudio, { passive: true });
+  }
+  if (global.addEventListener) {
+    global.addEventListener('focus', bridge.unlockAudio, { passive: true });
   }
   bridge.installExitHook();
   if (global.setTimeout) {

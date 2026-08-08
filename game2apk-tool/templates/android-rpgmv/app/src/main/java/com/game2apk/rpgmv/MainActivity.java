@@ -1,6 +1,9 @@
 package com.game2apk.rpgmv;
 
 import android.app.Activity;
+import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
@@ -39,6 +42,19 @@ public final class MainActivity extends Activity {
     private OverlayView overlay;
     private KeyPulseStateMachine systemPulses;
     private Game2ApkConfig config;
+    private AudioManager audioManager;
+    private AudioFocusRequest audioFocusRequest;
+    private boolean audioFocusHeld;
+    private final AudioManager.OnAudioFocusChangeListener audioFocusChangeListener =
+            focusChange -> {
+                // WebAudio can be suspended while another app temporarily owns
+                // focus (or while a Bluetooth route changes). Ask MV to resume
+                // on the next foreground/focus gain without touching routing
+                // or disconnecting another app's audio device.
+                if (focusChange == AudioManager.AUDIOFOCUS_GAIN && webView != null) {
+                    resumeWebAudio();
+                }
+            };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -77,6 +93,8 @@ public final class MainActivity extends Activity {
         root.addView(overlay, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         setContentView(root);
+        setVolumeControlStream(AudioManager.STREAM_MUSIC);
+        requestAudioFocus();
         webView.loadUrl(START_URL);
     }
 
@@ -109,6 +127,107 @@ public final class MainActivity extends Activity {
                 .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
                 .build();
         target.setWebViewClient(new OfflineAssetWebViewClient(assetLoader));
+    }
+
+    /**
+     * Requests a game/media focus that allows other apps to keep playing
+     * (possibly ducked). Android routes the WebView's media stream to the
+     * currently selected output, including Bluetooth A2DP, without requiring
+     * Bluetooth scan/connect permissions or forcing a route change.
+     */
+    private void requestAudioFocus() {
+        if (audioFocusHeld) {
+            return;
+        }
+        audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+        if (audioManager == null) {
+            Log.w(TAG, "AudioManager unavailable; WebView will use system media defaults");
+            return;
+        }
+        final AudioAttributes attributes = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_GAME)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build();
+        final int result;
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            // BGM/SE can last for the whole game session.  A full game focus
+            // avoids a Bluetooth headset being left in a ducked/silent state
+            // by another transient media focus, while still leaving Android
+            // in charge of the currently selected output route.
+            audioFocusRequest = new AudioFocusRequest.Builder(
+                    AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(attributes)
+                    .setAcceptsDelayedFocusGain(false)
+                    .setWillPauseWhenDucked(false)
+                    .setOnAudioFocusChangeListener(audioFocusChangeListener)
+                    .build();
+            result = audioManager.requestAudioFocus(audioFocusRequest);
+        } else {
+            audioFocusRequest = null;
+            result = audioManager.requestAudioFocus(audioFocusChangeListener,
+                    AudioManager.STREAM_MUSIC,
+                    AudioManager.AUDIOFOCUS_GAIN);
+        }
+        if (result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+            Log.w(TAG, "Audio focus not granted: " + result);
+            audioFocusRequest = null;
+            audioFocusHeld = false;
+        } else {
+            audioFocusHeld = true;
+        }
+    }
+
+    private void abandonAudioFocus() {
+        if (audioManager == null) {
+            audioFocusHeld = false;
+            return;
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 26 && audioFocusRequest != null) {
+            audioManager.abandonAudioFocusRequest(audioFocusRequest);
+        } else {
+            audioManager.abandonAudioFocus(audioFocusChangeListener);
+        }
+        audioFocusRequest = null;
+        audioFocusHeld = false;
+    }
+
+    /** Resume a WebAudio context after page load, focus gain, or route change. */
+    private void resumeWebAudio() {
+        if (webView == null) {
+            return;
+        }
+        webView.post(() -> webView.evaluateJavascript(
+                "window.Game2ApkInput&&window.Game2ApkInput.unlockAudio&&window.Game2ApkInput.unlockAudio();",
+                null));
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (webView != null) {
+            webView.onResume();
+            webView.resumeTimers();
+        }
+        requestAudioFocus();
+        resumeWebAudio();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            requestAudioFocus();
+            resumeWebAudio();
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        abandonAudioFocus();
+        if (webView != null) {
+            webView.onPause();
+        }
+        super.onPause();
     }
 
     private void showStartupError(String message) {
@@ -145,6 +264,7 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        abandonAudioFocus();
         if (overlay != null) {
             overlay.releaseAllInput();
             overlay = null;
@@ -221,6 +341,10 @@ public final class MainActivity extends Activity {
             super.onPageFinished(view, url);
             if (isInternalAsset(Uri.parse(url)) && inputBridge != null) {
                 inputBridge.setPageReady(true);
+                // onResume may run before the MV page creates WebAudio.  A
+                // second resume at onPageFinished covers that ordering and
+                // is safe when the context is already running.
+                resumeWebAudio();
             }
         }
 

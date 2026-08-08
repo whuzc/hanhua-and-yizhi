@@ -52,11 +52,11 @@ def default_application_id(project_id: str) -> str:
 def build_config(
     app_name: str = "仙肴圣餐超魔改 Ver22",
     application_id: str = "com.game2apk.xianyaoshengcanver22",
-    # Keep these defaults monotonic with the released 1.0.1 build. Android
+    # Keep these defaults monotonic with the released 1.0.2 build. Android
     # accepts an in-place update only when the package/signing identity stays
     # the same and versionCode increases.
-    version_code: int = 3,
-    version_name: str = "1.0.2",
+    version_code: int = 4,
+    version_name: str = "1.0.3",
     icon_path: str | None = None,
     control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:

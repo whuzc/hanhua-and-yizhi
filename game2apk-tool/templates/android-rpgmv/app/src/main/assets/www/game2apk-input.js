@@ -50,6 +50,12 @@
             var webAudio = global.WebAudio;
             if (webAudio && webAudio._context) {
                 global.Game2ApkInput._resumeAudioContext(webAudio._context);
+                // MV's own unlock handler primes a zero-length source.  Keep
+                // that step for Android WebView/Bluetooth routes as well;
+                // it is harmless when the context is already unlocked.
+                if (typeof webAudio._onTouchStart === 'function') {
+                    try { webAudio._onTouchStart(); } catch (_) {}
+                }
             }
             return true;
         },
@@ -84,6 +90,10 @@
         global.document.addEventListener('touchstart', global.Game2ApkInput.unlockAudio, { passive: true });
         global.document.addEventListener('pointerdown', global.Game2ApkInput.unlockAudio, { passive: true });
         global.document.addEventListener('keydown', global.Game2ApkInput.unlockAudio, { passive: true });
+        global.document.addEventListener('visibilitychange', global.Game2ApkInput.unlockAudio, { passive: true });
+    }
+    if (global.addEventListener) {
+        global.addEventListener('focus', global.Game2ApkInput.unlockAudio, { passive: true });
     }
     global.Game2ApkInput.installExitHook();
     if (global.setTimeout) {

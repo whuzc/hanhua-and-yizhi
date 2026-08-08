@@ -26,4 +26,4 @@ python .\scripts\game2apk.py --help
 powershell -ExecutionPolicy Bypass -File .\scripts\build-portable.ps1
 ```
 
-Android 更新候选需确认 applicationId `com.game2apk.xianyaoshengcanver22`、versionCode 3、versionName 1.0.2、同一证书、非 debuggable、无 INTERNET、默认 icon 非空、zipalign/apksigner 通过、assets 严格对账且无 save/secret/keystore。覆盖安装只允许 `adb install -r`；禁止卸载和清数据。WebView 存档保留规则见 `docs/storage-and-upgrade.md`；历史验收证据见 `docs/06-security-remediation-and-rebuild.md`。
+Android 更新候选需确认 applicationId `com.game2apk.xianyaoshengcanver22`、versionCode 4、versionName 1.0.3、同一证书、非 debuggable、无 INTERNET、默认 icon 非空、zipalign/apksigner 通过、assets 严格对账且无 save/secret/keystore。覆盖安装只允许 `adb install -r`；禁止卸载和清数据。WebView 存档保留规则见 `docs/storage-and-upgrade.md`；历史验收证据见 `docs/06-security-remediation-and-rebuild.md`。

@@ -95,13 +95,13 @@ class SecurityAndInputContractTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         config = build_config()
         self.assertEqual(config["applicationId"], "com.game2apk.xianyaoshengcanver22")
-        self.assertEqual(config["versionCode"], 3)
-        self.assertEqual(config["versionName"], "1.0.2")
+        self.assertEqual(config["versionCode"], 4)
+        self.assertEqual(config["versionName"], "1.0.3")
 
         gradle = (root / "templates" / "android-rpgmv" / "app" / "build.gradle").read_text(encoding="utf-8")
         self.assertIn("com.game2apk.xianyaoshengcanver22", gradle)
-        self.assertIn("versionCode Integer.parseInt(requiredOrDefault('game2apkVersionCode', '3'))", gradle)
-        self.assertIn("versionName requiredOrDefault('game2apkVersionName', '1.0.2')", gradle)
+        self.assertIn("versionCode Integer.parseInt(requiredOrDefault('game2apkVersionCode', '4'))", gradle)
+        self.assertIn("versionName requiredOrDefault('game2apkVersionName', '1.0.3')", gradle)
 
         activity = (root / "templates" / "android-rpgmv" / "app" / "src" / "main" / "java" / "com" / "game2apk" / "rpgmv" / "MainActivity.java").read_text(encoding="utf-8")
         store = (root / "templates" / "android-rpgmv" / "app" / "src" / "main" / "java" / "com" / "game2apk" / "rpgmv" / "OverlayStateStore.java").read_text(encoding="utf-8")
@@ -110,6 +110,18 @@ class SecurityAndInputContractTests(unittest.TestCase):
         self.assertNotRegex(activity, r"clear(?:Cache|History|FormData)|deleteAllData|deleteDatabase")
         self.assertIn('PREFS_NAME = "game2apk.overlay.v1"', store)
         self.assertNotRegex(store, r"clear\(\)|deleteDatabase|deleteAll")
+
+    def test_bluetooth_audio_contract_uses_focus_without_route_permissions(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        activity = (root / "templates" / "android-rpgmv" / "app" / "src" / "main" / "java" / "com" / "game2apk" / "rpgmv" / "MainActivity.java").read_text(encoding="utf-8")
+        self.assertIn("AudioManager.AUDIOFOCUS_GAIN)", activity)
+        self.assertIn("AudioAttributes.USAGE_GAME", activity)
+        self.assertIn("AudioAttributes.CONTENT_TYPE_MUSIC", activity)
+        self.assertIn("resumeWebAudio();", activity)
+        self.assertNotIn("BLUETOOTH_CONNECT", activity)
+        self.assertNotIn("setBluetoothA2dpOn", activity)
+        manifest = (root / "templates" / "android-rpgmv" / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
+        self.assertNotIn("BLUETOOTH", manifest)
 
 
 if __name__ == "__main__":

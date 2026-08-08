@@ -13,6 +13,7 @@ const bridgePath = path.join(
 );
 const listeners = {};
 const resumed = [];
+const primed = [];
 const audioContext = {
   state: "suspended",
   resume() {
@@ -22,7 +23,10 @@ const audioContext = {
   }
 };
 const window = {
-  WebAudio: { _context: audioContext },
+  WebAudio: {
+    _context: audioContext,
+    _onTouchStart() { primed.push(true); }
+  },
   SceneManager: { exit() { throw new Error("original exit should be replaced"); } },
   location: { href: "https://appassets.androidplatform.net/assets/www/index.html" },
   close() { throw new Error("original close should be replaced"); },
@@ -45,6 +49,9 @@ if (typeof listeners.touchstart !== "function") {
 listeners.touchstart();
 if (resumed.length !== 1 || audioContext.state !== "running") {
   throw new Error("suspended WebAudio context was not resumed");
+}
+if (primed.length !== 1) {
+  throw new Error("MV WebAudio unlock source was not primed");
 }
 window.location.href = "reset";
 window.SceneManager.exit();
