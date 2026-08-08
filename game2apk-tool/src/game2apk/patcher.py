@@ -93,8 +93,9 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
      page, so it uses MV's own save/runtime objects and never touches files. */
   (function installCheat() {
     var cheat = global.Game2ApkCheat = global.Game2ApkCheat || {};
-    cheat.state = cheat.state || { god: false, freeShop: false, recall: null, godSnapshot: null };
+    cheat.state = cheat.state || { god: false, freeShop: false, recall: null, godSnapshot: null, battleOverride: null };
     cheat.state.godSnapshot = cheat.state.godSnapshot || null;
+    cheat.state.battleOverride = cheat.state.battleOverride || null;
     cheat.recallMapIds = [136, 97]; // 136 = 正式“事件回想”; 97 = test map
     cheat.customFields = [
       [600, '开发经验·淫乱'], [664, '淫乱 STUP'], [1402, 'ステEXP·淫乱'], [616, '卖春经验 STUP'],
@@ -167,7 +168,7 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
       cheat.state.godSnapshot = null;
     };
     cheat.maintainGod = function (actor) {
-      if (!cheat.state.god || !actor || !actor.isActor || !actor.isActor()) return;
+      if (!cheat.state.god || cheat.state.battleOverride === 2 || !actor || !actor.isActor || !actor.isActor()) return;
       if (!actor._paramPlus) actor._paramPlus = [0, 0, 0, 0, 0, 0, 0, 0];
       var entry = cheat.ensureGodEntry(actor); if (!entry) return;
       // `_hp` is written directly below, so any value observed between two
@@ -264,10 +265,12 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
       var bm = global.BattleManager;
       if (bm.isBattleEnd && bm.isBattleEnd()) return false;
       if (result === 0 && typeof bm.processVictory === 'function') {
+        cheat.state.battleOverride = 0;
         bm.processVictory();
       } else if (result === 2 && typeof bm.processDefeat === 'function') {
         // Native updateBattleEnd uses all-dead to choose game-over/revive.  Set
         // HP to zero first so the normal defeat, callback, and canLose rules run.
+        cheat.state.battleOverride = 2;
         if (global.$gameParty && $gameParty.members) $gameParty.members().forEach(function (a) { if (a.setHp) a.setHp(0); });
         bm.processDefeat();
       } else return false;
@@ -277,6 +280,7 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
     cheat.refreshBattleControls = function () {
       var active = cheat.isBattleActive();
       ['g2a-win', 'g2a-lose'].forEach(function (id) { var e = document.getElementById(id); if (e) e.disabled = !active; });
+      if (!active && cheat.state.battleOverride !== null) { cheat.state.battleOverride = null; }
     };
     cheat.refresh = function () {
       cheat.refreshBattleControls();

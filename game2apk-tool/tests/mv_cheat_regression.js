@@ -6,7 +6,7 @@ for (const token of [
   'Game2ApkCheat', '999999999', '$gameParty._gold = 999999999', 'Scene_Shop', 'buyingPrice',
   'gainHp', 'changeLevel', '2010', '2034', '2085', 'reserveTransfer',
   'processVictory', 'processDefeat', 'g2a-win', 'g2a-lose', 'isBattleActive',
-  'paramDelta', 'naturalHp', 'godHp', 'refreshBattleControls', '仅能在战斗进行中使用',
+  'paramDelta', 'naturalHp', 'godHp', 'battleOverride', 'refreshBattleControls', '仅能在战斗进行中使用',
   'recallMapIds = [136, 97]'
 ]) {
   if (!bridge.includes(token)) throw new Error(`missing cheat contract: ${token}`);
