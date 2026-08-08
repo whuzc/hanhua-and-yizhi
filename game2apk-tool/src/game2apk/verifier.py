@@ -114,7 +114,11 @@ def _stage_asset_check(apk: Path, manifest_path: str | Path | None) -> dict[str,
             else:
                 expected[normalized] = item
         generated = {"assets/www/js/game2apk-input.js", "assets/www/game2apk-config.json"}
-        modified = {"assets/www/index.html"}
+        # Patcher injects the input bridge in index.html and rewrites MV's
+        # encrypted-audio extension selector in rpg_managers.js.  Both are
+        # intentional, auditable staged mutations; all other copied assets
+        # must still match the source manifest byte-for-byte.
+        modified = {"assets/www/index.html", "assets/www/js/rpg_managers.js"}
         with zipfile.ZipFile(apk) as archive:
             actual_to_raw: dict[str, str] = {}
             repaired_names: list[str] = []

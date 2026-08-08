@@ -17,6 +17,33 @@ _CORE_SCRIPT = re.compile(
 )
 _BRIDGE_SCRIPT = re.compile(r"<script\b[^>]*\bsrc\s*=\s*[\"'](?:\./)?js/game2apk-input\.js[\"'][^>]*>\s*</script>", re.IGNORECASE)
 
+# RPG Maker MV normally selects ``.m4a`` on mobile browsers.  Encrypted MV
+# games distributed by this tool contain only ``.rpgmvo`` (the encrypted
+# form of OGG), so that default produces a ``.rpgmvm`` request and a 404 in
+# Android WebView.  Keep the patch narrowly scoped to encrypted audio: the
+# original desktop/unencrypted extension selection remains unchanged.
+_AUDIO_FILE_EXT = re.compile(
+    r"AudioManager\.audioFileExt\s*=\s*function\s*\(\)\s*\{"
+    r"\s*if\s*\(WebAudio\.canPlayOgg\(\)\s*&&\s*!Utils\.isMobileDevice\(\)\)\s*\{"
+    r"\s*return\s*['\"]\.ogg['\"]\s*;\s*\}"
+    r"\s*else\s*\{\s*return\s*['\"]\.m4a['\"]\s*;\s*\}"
+    r"\s*\}\s*;",
+    re.IGNORECASE,
+)
+
+_AUDIO_FILE_EXT_PATCH = """AudioManager.audioFileExt = function() {
+    // Android WebView reports a mobile user agent, but this project ships
+    // encrypted OGG assets (*.rpgmvo), not encrypted M4A (*.rpgmvm).
+    if (Decrypter.hasEncryptedAudio) {
+        return '.ogg';
+    }
+    if (WebAudio.canPlayOgg() && !Utils.isMobileDevice()) {
+        return '.ogg';
+    } else {
+        return '.m4a';
+    }
+};"""
+
 BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Android v1. */
 (function (global) {
   'use strict';
@@ -112,6 +139,34 @@ def _read_index(path: Path) -> tuple[str, str]:
     raise BlockedError(f"index.html is not a supported text encoding: {path}")
 
 
+def _patch_encrypted_audio_extension(staged_www: Path) -> bool:
+    """Force encrypted MV audio to use the OGG/RPGMVO asset family.
+
+    The source game is never touched: ``staged_www`` is the marker-protected
+    copy created by the staging pipeline.  A missing managers script is
+    allowed for generic/non-MV inputs, while an unexpected MV implementation
+    fails closed instead of silently shipping the known mobile 404 behavior.
+    """
+
+    managers_path = staged_www / "js" / "rpg_managers.js"
+    if not managers_path.is_file():
+        return False
+    managers, encoding = _read_index(managers_path)
+    matches = list(_AUDIO_FILE_EXT.finditer(managers))
+    if len(matches) != 1:
+        raise BlockedError(
+            f"expected exactly one RPG Maker MV AudioManager.audioFileExt implementation, found {len(matches)}"
+        )
+    patched = managers[: matches[0].start()] + _AUDIO_FILE_EXT_PATCH + managers[matches[0].end() :]
+    newline = "\r\n" if "\r\n" in managers else "\n"
+    atomic_write_text(
+        managers_path,
+        patched.replace("\r\n", "\n").replace("\n", newline),
+        encoding="utf-8-sig" if encoding == "utf-8-sig" else "utf-8",
+    )
+    return True
+
+
 def patch_staged_www(staged_www: str | Path, build_config: BuildConfig | dict) -> dict[str, str | int]:
     root = Path(staged_www).resolve(strict=True)
     _assert_staged(root)
@@ -141,6 +196,7 @@ def patch_staged_www(staged_www: str | Path, build_config: BuildConfig | dict) -
     else:
         config_data = dict(build_config)
     assert_no_secrets(config_data)
+    audio_extension_patched = _patch_encrypted_audio_extension(root)
     newline = "\r\n" if "\r\n" in index else "\n"
     insertion = newline + "    <script type=\"text/javascript\" src=\"js/game2apk-input.js\"></script>"
     patched = index[: core_matches[0].end()] + insertion + index[core_matches[0].end() :]
@@ -148,4 +204,10 @@ def patch_staged_www(staged_www: str | Path, build_config: BuildConfig | dict) -
     atomic_write_text(bridge_path, BRIDGE_SOURCE.replace("\n", newline))
     config_path = root / "game2apk-config.json"
     write_android_config(config_path, config_data)
-    return {"index": str(index_path), "bridge": str(bridge_path), "config": str(config_path), "injectionCount": 1}
+    return {
+        "index": str(index_path),
+        "bridge": str(bridge_path),
+        "config": str(config_path),
+        "injectionCount": 1,
+        "encryptedAudioExtensionPatched": int(audio_extension_patched),
+    }

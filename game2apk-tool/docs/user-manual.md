@@ -1,5 +1,7 @@
 # 用户手册
 
+当前发布候选为 versionCode `5`、versionName `1.0.4`，从 4/1.0.3 原地升级；安装更新时不要卸载或清除数据。
+
 ## 工作流
 
 选择原 RPG Maker MV 根目录或 `www`，依次执行 inspect → stage → patch → build → sign → verify。原目录只读；`.work/<project-id>` 必须带 marker，存档、备份和临时文件在 stage 时排除。构建前后会复算 source snapshot，任何源树变化都会阻止候选输出。
@@ -26,4 +28,4 @@ python .\scripts\game2apk.py --help
 powershell -ExecutionPolicy Bypass -File .\scripts\build-portable.ps1
 ```
 
-Android 更新候选需确认 applicationId `com.game2apk.xianyaoshengcanver22`、versionCode 4、versionName 1.0.3、同一证书、非 debuggable、无 INTERNET、默认 icon 非空、zipalign/apksigner 通过、assets 严格对账且无 save/secret/keystore。覆盖安装只允许 `adb install -r`；禁止卸载和清数据。WebView 存档保留规则见 `docs/storage-and-upgrade.md`；历史验收证据见 `docs/06-security-remediation-and-rebuild.md`。
+Android 更新候选需确认 applicationId `com.game2apk.xianyaoshengcanver22`、versionCode 5、versionName 1.0.4、同一证书、非 debuggable、无 INTERNET、默认 icon 非空、zipalign/apksigner 通过、assets 严格对账且无 save/secret/keystore。覆盖安装只允许 `adb install -r`；禁止卸载和清数据。WebView 存档保留规则见 `docs/storage-and-upgrade.md`；历史验收证据见 `docs/06-security-remediation-and-rebuild.md`。

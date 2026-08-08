@@ -44,7 +44,17 @@ class PipelineTests(unittest.TestCase):
             encoding="utf-8",
         )
         (self.www / "js" / "rpg_core.js").write_text("// rpg_core.js v1.6.1\nGraphics.width = 816; Graphics.height = 624;", encoding="utf-8")
-        (self.www / "js" / "rpg_managers.js").write_text("// browser-safe manager", encoding="utf-8")
+        (self.www / "js" / "rpg_managers.js").write_text(
+            """AudioManager.audioFileExt = function() {
+    if (WebAudio.canPlayOgg() && !Utils.isMobileDevice()) {
+        return '.ogg';
+    } else {
+        return '.m4a';
+    }
+};
+""",
+            encoding="utf-8",
+        )
         plugins = [
             {"name": "YEP_CoreEngine", "status": True, "parameters": {"Screen Width": "1024", "Screen Height": "768"}},
             {"name": "TMCommonEventKey", "status": True, "parameters": {"commonKeyA": "25", "commonKeyW": "294"}},
@@ -86,8 +96,8 @@ class PipelineTests(unittest.TestCase):
     def test_default_update_identity_and_version_are_monotonic(self) -> None:
         data = build_config(control=default_control_config())
         self.assertEqual(data["applicationId"], "com.game2apk.xianyaoshengcanver22")
-        self.assertEqual(data["versionCode"], 4)
-        self.assertEqual(data["versionName"], "1.0.3")
+        self.assertEqual(data["versionCode"], 5)
+        self.assertEqual(data["versionName"], "1.0.4")
 
     def test_inspect_reports_mv_yep_resolution_keys_and_encryption_without_key(self) -> None:
         report = inspect_game(self.game)
@@ -162,6 +172,13 @@ class PipelineTests(unittest.TestCase):
         stage = StageService().stage(report, self.root / ".work", minimum_free_bytes=0)
         result = patch_staged_www(stage.staged_www, self._config())
         self.assertEqual(result["injectionCount"], 1)
+        self.assertEqual(result["encryptedAudioExtensionPatched"], 1)
+        managers = Path(stage.staged_www, "js", "rpg_managers.js").read_text(encoding="utf-8")
+        self.assertIn("if (Decrypter.hasEncryptedAudio)", managers)
+        self.assertIn("return '.ogg';", managers)
+        # The non-encrypted desktop branch remains intact.
+        self.assertIn("!Utils.isMobileDevice()", managers)
+        self.assertIn("return '.m4a';", managers)
         index = Path(stage.staged_www, "index.html").read_text(encoding="utf-8")
         self.assertEqual(index.count("game2apk-input.js"), 1)
         self.assertEqual(load_android_config(Path(stage.staged_www, "game2apk-config.json"))["schemaVersion"], 1)
@@ -334,13 +351,13 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn("android { androidResources", rendered_settings.read_text(encoding="utf-8"))
         def fake_tool(command):
             if "aapt2" in command[0]:
-                return 0, "package: name='com.game2apk.xianyaoshengcanver22' versionCode='4' versionName='1.0.3'\napplication: label='Demo' icon='@drawable/game2apk_launcher'\ndebuggable=false"
+                return 0, "package: name='com.game2apk.xianyaoshengcanver22' versionCode='5' versionName='1.0.4'\napplication: label='Demo' icon='@drawable/game2apk_launcher'\ndebuggable=false"
             if "apksigner" in command[0]:
                 return 0, "Verified using v2 scheme\nSigner #1 certificate SHA-256 digest: AA:BB"
             return 0, "Verification successful"
 
         with mock.patch("game2apk.verifier._run", side_effect=fake_tool):
-            verified = VerificationService().verify(result.apk_path, toolchain, result.started_at_utc, expected_application_id=self._config().application_id, expected_version_code=4)
+            verified = VerificationService().verify(result.apk_path, toolchain, result.started_at_utc, expected_application_id=self._config().application_id, expected_version_code=5)
         self.assertTrue(verified.passed)
         self.assertTrue(verified.signature_candidate)
         self.assertFalse(verified.device["verified"])

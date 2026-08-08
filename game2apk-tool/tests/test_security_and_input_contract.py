@@ -95,13 +95,13 @@ class SecurityAndInputContractTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         config = build_config()
         self.assertEqual(config["applicationId"], "com.game2apk.xianyaoshengcanver22")
-        self.assertEqual(config["versionCode"], 4)
-        self.assertEqual(config["versionName"], "1.0.3")
+        self.assertEqual(config["versionCode"], 5)
+        self.assertEqual(config["versionName"], "1.0.4")
 
         gradle = (root / "templates" / "android-rpgmv" / "app" / "build.gradle").read_text(encoding="utf-8")
         self.assertIn("com.game2apk.xianyaoshengcanver22", gradle)
-        self.assertIn("versionCode Integer.parseInt(requiredOrDefault('game2apkVersionCode', '4'))", gradle)
-        self.assertIn("versionName requiredOrDefault('game2apkVersionName', '1.0.3')", gradle)
+        self.assertIn("versionCode Integer.parseInt(requiredOrDefault('game2apkVersionCode', '5'))", gradle)
+        self.assertIn("versionName requiredOrDefault('game2apkVersionName', '1.0.4')", gradle)
 
         activity = (root / "templates" / "android-rpgmv" / "app" / "src" / "main" / "java" / "com" / "game2apk" / "rpgmv" / "MainActivity.java").read_text(encoding="utf-8")
         store = (root / "templates" / "android-rpgmv" / "app" / "src" / "main" / "java" / "com" / "game2apk" / "rpgmv" / "OverlayStateStore.java").read_text(encoding="utf-8")
