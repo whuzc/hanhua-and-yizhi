@@ -1,173 +1,186 @@
 # game2apk-tool
 
-当前发布候选为 versionCode `7`、versionName `1.2.0`（由 6/1.1.0 升级），包含可逆无敌、战斗胜负控制、作弊器面板、事件回想传送和加密音频修复。
+RPG Maker MV 项目迁移到 Android 的 Windows 本地工具。它把**用户自己拥有或获得授权的 MV 项目**暂存到干净模板中，生成可侧载安装的签名 APK，并输出可追溯的静态验收报告。
 
-Windows 本地工具：检查 RPG Maker MV、在受标记的 `.work` 副本中暂存和补丁、可选离线翻译、Gradle 构建、稳定签名并做 APK 静态验收。原游戏目录只读；本项目不生成 AAB。
+> 当前工具版本：`v1.3.0`（versionCode `8`）
+> [下载 Windows portable v1.3.0](https://github.com/whuzc/hanhua-and-yizhi/releases/tag/v1.3.0)
 
-Windows portable 版采用“浏览器前端 + 本机无 UI 后台”架构：双击 `game2apk-ui.exe` 打开完整的 StarRail Calc 风格玻璃界面；同目录 `game2apk-tool.exe` 只负责本机后台和命令行，不再作为默认可见界面。前端可原生浏览目录、保存工具链路径、检查项目、构建/签名/静态验收，并实时显示阶段、百分比、日志、错误与取消状态。运行边界与接口安全说明见 `docs/desktop-frontend.md`。
+## 这是什么
 
-## 快速开始
+项目由两个部分组成：
 
-```powershell
-$env:PYTHONPATH = (Resolve-Path .\game2apk-tool\src).Path
-python .\game2apk-tool\scripts\game2apk.py inspect ".\仙肴圣餐超魔改 Ver22"
-python .\game2apk-tool\scripts\game2apk.py run ".\仙肴圣餐超魔改 Ver22" `
-  --template .\game2apk-tool\templates\android-rpgmv `
-  --version-code 7 --version-name 1.2.0
-```
+- `game2apk-ui.exe`：面向普通用户的浏览器前端，负责选目录、填写配置、显示进度和结果。
+- `game2apk-tool.exe`：无 UI 后台和命令行入口，由前端或脚本调用。
 
-签名密码默认优先读取稳定 `applicationId` 对应的 Windows DPAPI 凭据。首次创建或 standalone 签名只能使用 `--password-env NAME`、`--password-stdin` 或 `--password-prompt`；`run` 对应为 `--sign-password-env NAME`、`--sign-password-stdin` 或 `--sign-password-prompt`。DeepSeek 只允许 `--api-key-env NAME`、`--api-key-stdin` 或 `--api-key-prompt`，其中 argv 只出现环境变量名，不出现秘密值。旧的 `--api-key VALUE`、`--password VALUE`、`--sign-password VALUE` 及等价 raw-secret 参数会被拒绝。
+界面采用圆润玻璃质感布局，后台只监听本机 `127.0.0.1` 随机端口。项目不会上传游戏文件，也不会把 Android SDK/JDK、原游戏资源、APK、存档、密钥或 API Key 打进 Release。
 
-本次更新目标 APK 固定为 `com.game2apk.xianyaoshengcanver22`、versionCode `7`、versionName `1.2.0`。稳定 keystore 位于 `.state/signing/<applicationId>/`，密码不写入日志、报告、APK、dist 或子进程 argv。覆盖安装必须继续使用同一 applicationId、同一签名证书，并使用 `adb install -r`；不要卸载或清除应用数据，否则 WebView 存档无法保留。详见 `docs/storage-and-upgrade.md`。
+本工具不是游戏发行平台，不包含任何原游戏内容、破解补丁或自动上架流程。请只处理自己拥有版权或取得分发授权的项目。
 
-## Android 输入契约
+## Windows portable：安装与启动
 
-覆盖层保持半透明横屏布局，只消费实际按钮命中区域；游戏空白区的单指事件原样留给 WebView/MV `TouchInput`。因此选择窗口会按触点切换选项，地图会保留 `Game_Temp.setDestination` 的触摸寻路、默认 dash 和事件交互，单指长按也保留 MV 消息加速语义。
+1. 从 [Releases](https://github.com/whuzc/hanhua-and-yizhi/releases) 下载 `game2apk-tool-windows-portable.zip`。
+2. 解压到有写入权限的目录。建议每次更新解压到新目录，不要覆盖正在运行的旧程序。
+3. 在 PowerShell 中启动前端：
 
-屏幕键位如下：
+   ```powershell
+   cd "D:\Tools\game2apk-tool"
+   .\game2apk-ui.exe
+   ```
 
-| 区域 | 行为 | MV keyCode |
-| --- | --- | ---: |
-| ↑ ↓ ← → | 按住持续方向，抬起立即释放，可多点同时按 | 38 / 40 / 37 / 39 |
-| 确认 | tap pulse，Enter/OK | 13 |
-| 取消 | tap pulse，X；保留原始 X code | 88 |
-| ESC | tap pulse，Escape | 27 |
-| 立绘 | tap pulse，A；目标游戏 Common Event 25 | 65 |
+   Windows PowerShell 默认不会从当前目录执行程序，所以要写 `.\game2apk-ui.exe`，不能只写 `game2apk-ui.exe`。
 
-系统返回键和游戏空白区两指轻点都产生一次 `27` cancel/back pulse。两指轻点必须两指都从游戏区开始，第二指在短窗口内落下，移动不超过 slop 且短时全部抬起；控制区多点、超时、拖动和三指不会误触发。识别第二指时只向 WebView 发送一次独立 `ACTION_CANCEL` 副本。隐藏/恢复控件、三指长按恢复、页面导航和 Activity 生命周期都会执行 `releaseAll`。
+4. 浏览器打开后，按页面顺序选择游戏目录、检查项目、配置工具链和构建。关闭前端时后台会自动回收。
 
-## 安全边界与测试
+portable 包不内置 AndroidDev、SDK、JDK 或 Gradle 缓存。它们体积较大且属于第三方工具，首次使用时由用户指定目录或在界面中确认官方 HTTPS 下载。
 
-```powershell
-python .\game2apk-tool\tests\run_tests.py
-```
+## 第一次使用
 
-测试覆盖 Python 安全来源、raw-secret 拒绝、日志/argv 脱敏、ZIP 规范化碰撞、默认 icon、暂存排除和 FakeTransport；Node 覆盖 MV key pulse、选择窗口 letterbox、地图目的地/dash/NPC 触摸和长按。Android Java 测试位于 `templates/android-rpgmv/app/src/test`，可用独立 JUnitCore 运行；不要依赖漂移的硬编码测试数量。
+### 1. 选择 MV 项目
 
-便携构建：
+点击“浏览目录”，选择包含 `www`、`index.html` 和 `data` 的 RPG Maker MV 项目目录。原目录只读，工具会在受标记的 `.work` 副本中暂存、补丁和构建，不直接修改源项目。
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\game2apk-tool\scripts\build-portable.ps1
-```
+点击“检查项目”后，页面会显示引擎、分辨率、资源和可构建状态。检查未通过时，“构建并验证”不会启用。
 
-portable 不得包含原游戏、存档、APK、AAB、keystore、DPAPI 文件或任何凭据值。完整修复和候选证据见 [docs/06-security-remediation-and-rebuild.md](docs/06-security-remediation-and-rebuild.md)。
+### 2. 配置 Android 工具链
 
-## 项目定位与版权边界
+工具启动时会自动检查：
 
-`game2apk-tool` 是一个面向 Windows 的本地迁移工具：它把用户自己拥有或获授权的 RPG Maker MV 项目暂存到干净模板中，生成可侧载安装的签名 APK，并给出可追溯的静态验收报告。它不是游戏发行平台，也不包含原游戏内容、破解补丁包或自动上架流程。
+- `ANDROID_SDK_ROOT`、`ANDROID_HOME`、`JAVA_HOME` 和 `PATH`；
+- Android Studio 常见安装目录；
+- 当前用户保存的 `%APPDATA%\\game2apk-tool\\toolchain.json`。
 
-请只处理自己拥有版权或取得分发授权的项目。GitHub 源码仓库只分享工具代码、干净 Android 模板、测试和文档；原游戏目录、`www` 资源、加密密钥、存档、签名材料、API Key 以及任何生成的 APK 都属于用户本地数据，严禁提交或上传。生成 APK 仅供授权用户本地测试/侧载，不应作为项目 Release 附件分发。
+如果电脑已经安装 SDK/JDK，直接浏览并保存实际目录即可，不会重复下载。SDK 根目录应直接包含 `platforms` 和 `build-tools`，JDK 根目录应直接包含 `bin\\java.exe`。
 
-## 主要功能
+如果缺少组件，可在工具链卡片点击官方下载按钮，选择安装位置并确认下载。Command-line Tools 只提供 `sdkmanager`；项目所需的 `platform`、`build-tools` 和（连接手机时需要的）`platform-tools` 仍由用户用 SDK Manager 或 Android Studio 安装并接受许可。
 
-- **MV → Android**：检查 RPG Maker MV 目录、识别引擎与分辨率、排除存档、在受标记的 `.work` 副本中补丁，使用版本化 Android 模板构建并静态验收。
-- **工具链自动发现**：启动时优先读取已存在的 `ANDROID_SDK_ROOT`、`ANDROID_HOME`、`JAVA_HOME`、`PATH`、Android Studio 默认目录和用户配置；如果本机已有 Android 工具，会直接调用，不重复安装。缺少组件时仅在用户点击下载并确认后访问官方 HTTPS 地址，安装目录由用户选择。Command-line Tools 下载后仍需用户用 `sdkmanager` 或 Android Studio 安装项目所需的 platform/build-tools/platform-tools；工具不会静默接受许可证。
-- **可选 DeepSeek 翻译**：默认不联网、不翻译。勾选强制翻译并明确确认第三方传输后，使用环境变量名、stdin 或隐藏 prompt 提供 Key；Key 不出现在 argv、日志、报告、APK 或 portable。建议先备份并逐段审阅机器翻译结果。
+Gradle 用户目录是跨项目共用的 `GRADLE_USER_HOME`，不是某一个游戏专属的缓存。构建后默认保留它，可加快下次构建和其他游戏构建；只有磁盘紧张或缓存损坏时才在关闭构建进程后手动清理。不要把 `.state`、存档或原游戏目录当作缓存删除。
 
-翻译默认使用官方模型 `deepseek-v4-flash`（输入 `v4flash` / `v4-flash` 会自动规范化），默认开启 thinking 并使用 `high` 强度；界面可切换关闭 thinking，或选择 `low / high / max`，以在自然度和速度之间取舍。默认每批 20 个文本块、最多 4 路并发，并启用相同文本去重、翻译缓存和限流重试。RPG Maker MV 的连续对话行会作为一个完整消息块交给模型，按上下文翻译并保留行数/顺序，不会按单词逐个翻译。可用 `GAME2APK_TRANSLATION_CONCURRENCY`（1–8）与 `GAME2APK_TRANSLATION_BATCH_SIZE`（1–100）按账号限流情况调整。完整策略与取舍见 [docs/translation-performance.md](docs/translation-performance.md)。
-- **签名与静态验收**：沿用固定 `applicationId=com.game2apk.xianyaoshengcanver22`、`versionCode=7`、`versionName=1.2.0` 的升级身份，自动完成 zipalign/apksigner/manifest/资源清单等静态检查；没有连接手机时不会宣称已完成实机验证。
-- **手机输入契约**：悬浮层保留确认、取消、ESC、立绘和四向方向键；方向键按住持续、抬起立即释放。单指点击游戏区保持 MV 原触摸语义（选项、地图目的地、dash、NPC/事件互动），单指长按加速文本；双指轻点发送一次返回/取消，三指和多余触点被忽略。悬浮层可以隐藏，避免遮挡原游戏。
-- **内置作弊器**：右上角入口可打开金币 `999999999`、角色字段编辑（等级、经验、HP/MP、基础参数及游戏存在的淫欲等扩展字段）、免费物品商店、无敌、回想房间传送、战斗强制胜利/失败。免费商店不做购买限额保护，仅提示按需购买；无敌开启时保存当前 HP/攻击/防御快照，关闭时按角色当前正常值恢复而不是覆盖升级后新值。作弊可能破坏事件、数值或存档，请复制存档后按需使用。
-- **存档升级契约**：应用升级必须保持同一 `applicationId` 和同一签名证书，并使用 `adb install -r` 或系统覆盖安装；不要卸载、清除数据或更换签名。WebView 的 localStorage、RPG Maker 存档和设置因此可以保留。新版本只增加兼容字段，不主动删除用户存档。
+### 3. 填写应用与签名
 
-## Windows portable
+填写应用名、包名、版本名和 versionCode。要覆盖安装旧 APK，必须保持同一个 `applicationId`、同一签名证书，并递增 versionCode。
 
-Release 包不内置 AndroidDev/SDK/JDK/Gradle 缓存，体积更小且不会夹带第三方工具授权。解压到用户有写入权限的目录后，按下面方式使用：
+签名密码和 DeepSeek Key 不应写进命令行参数。桌面前端只在当前构建请求中传递它们，后台不会写入日志、报告、设置文件、APK 或 portable 包。
 
-```powershell
-cd .\game2apk-tool
-.\game2apk-ui.exe
-```
+### 4. 构建并验证
 
-`game2apk-ui.exe` 会隐藏启动同目录的 `game2apk-tool.exe --backend --port 0`，从后台读取一个随机 loopback 地址后打开默认浏览器。不要直接双击 `game2apk-tool.exe`；它是无 UI 后台/CLI，供前端和脚本调用。工具链路径只保存到当前用户 `%APPDATA%\\game2apk-tool\\toolchain.json`，不会写回仓库。
+点击“构建并验证”。页面每 500 ms 获取任务状态，显示阶段、百分比、滚动日志、错误、APK 路径、SHA-256、签名候选和静态验收报告。报告区域只保留最近日志，支持手动滚动；点击“取消任务”会请求后台停止当前阶段。
 
-浏览器前端的标准流程为：选择游戏目录 → 点击“检查项目” → 填写应用信息与可选翻译/签名密码 → 必要时保存 SDK/JDK/Gradle 路径，或点击“下载 Android 命令行工具/下载 JDK 17”并选择安装目录、确认官方 HTTPS 下载 → 点击“构建并验证”。检查通过前构建按钮不会启用；任务开始后页面每 500 ms 读取状态，并显示阶段、百分比、实时日志、结果或脱敏错误。点击“取消任务”会请求后台安全停止当前阶段。
+没有连接 Android 设备时，工具只报告静态验收结果，不会声称完成实机验证。
 
-每次启动都只监听 `127.0.0.1` 的随机端口，HTML 页面由同一个本机后台提供；写操作要求 HttpOnly 同源会话 Cookie 与 `X-Game2Apk-Request` 请求头。DeepSeek Key 与签名密码仅存在于当前构建请求内，后台不会写入日志、设置文件、APK 或 portable。页面每 5 秒发送心跳；关闭标签页后后台约 30 秒内回收，关闭启动器时也会由父进程监视器回收。浏览器前端响应系统的 `prefers-reduced-motion`；旧 Tk 兼容界面才使用 `GAME2APK_REDUCE_MOTION=1`。
+## 可选 DeepSeek 翻译
 
-兼容入口：
+翻译默认关闭。检查项目时工具会在本地统计文本语言，提示项目是否已经包含中文以及仍存在多少非中文文本；**检测到中文不会自动翻译**。
+
+勾选翻译后仍需明确确认“向第三方 DeepSeek 发送待翻译文本”，并通过环境变量名、stdin 或隐藏 prompt 提供 API Key。API Key 不会出现在 argv、日志、报告、APK 或 portable 包中。
+
+翻译策略：
+
+- 默认模型为 `deepseek-v4-flash`，`v4flash` 和 `v4-flash` 会规范化为该模型；
+- 只翻译非中文文本；纯中文块保留，混合文本中的中文片段也保留；
+- 连续对话行会组成一个完整消息块发送，保留上下文、行数、顺序和 MV 控制符，不会逐词翻译；
+- 默认开启 thinking，可选择关闭，或选择思考强度 `low`、`high`、`max`；强度越高通常越自然，也越慢、越耗 Token；
+- 默认每批 20 个文本块、最多 4 路并发，并启用去重、翻译缓存、占位符保护和限流重试。
+
+可用环境变量调整吞吐：
 
 ```powershell
-# 直接打开完整浏览器前端（建议仍使用 game2apk-ui.exe，以便自动回收后台）
-.\game2apk-tool.exe --web
-
-# 后台服务，供调试或其他本机前端连接；不会打开窗口
-.\game2apk-tool.exe --backend --port 0
-
-# 原有脚本式命令行
-.\game2apk-tool.exe --cli --help
-
-# 仅用于排障的旧 Tk 界面
-.\game2apk-tool.exe --legacy-gui
+$env:GAME2APK_TRANSLATION_CONCURRENCY = "4"  # 1–8
+$env:GAME2APK_TRANSLATION_BATCH_SIZE = "20" # 1–100
 ```
 
-## 从源码运行
+机器翻译仍可能有专有名词或语气问题。建议先备份项目并逐段审阅结果。完整策略见 [docs/translation-performance.md](game2apk-tool/docs/translation-performance.md)。
 
-需要 Windows、Python 3.11（`<3.12`）、JDK 17、Gradle wrapper 和 Android SDK build-tools。项目运行时依赖仅 Python 标准库；Node.js 只用于运行 MV 回归脚本。建议在仓库根目录执行：
+## Android 运行时功能
 
-```powershell
-$env:PYTHONPATH = (Resolve-Path .\game2apk-tool\src).Path
-python .\game2apk-tool\scripts\game2apk.py --help
-python .\game2apk-tool\tests\run_tests.py
-python -m game2apk.ui_launcher
-```
+生成的 APK 面向横屏 WebView/MV 游戏，包含：
 
-如需直接调试本机后台，可运行 `python -m game2apk.portable_entry --backend --port 0`；如需旧 Tk 排障界面，可运行 `python -m game2apk.portable_entry --legacy-gui`。构建 portable 需要 PyInstaller：
+- 半透明悬浮控制层：四向方向键、确认、取消、ESC 和立绘键；悬浮层可隐藏；
+- 单指点击游戏区保留 MV 原触摸语义：选项切换、地图目的地、dash、NPC/事件互动；
+- 单指长按加速文本；双指轻点发送一次返回/取消；三指和多余触点忽略；
+- 加密 OGG 音频使用 `.ogg → .rpgmvo`，兼容 Android WebView、外放和蓝牙音频路径；
+- APK 静态检查包含 manifest、资源清单、zipalign、apksigner 和签名候选状态。
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\game2apk-tool\scripts\build-portable.ps1
-```
+### 内置作弊器
 
-## 首次配置 Android 工具链
+右上角“作弊”入口会根据目标 MV 项目的运行时数据库动态生成高级选项，尽量适配不同游戏：
 
-1. 启动 `game2apk-ui.exe`，等待“Android 工具链”卡片完成本地扫描。已有 Android Studio/SDK/JDK 时可直接填写路径或点“浏览”，再点“保存并重检”。
-2. 如果缺少 SDK/JDK，点击对应的官方工具下载按钮，选择安装位置并阅读确认框。下载仅允许官方 HTTPS host，失败时可以改为手动选择已下载目录。
-3. Command-line Tools 只提供 `sdkmanager`，按模板的 `compileSdk`/`buildToolsVersion` 安装 platform 和 build-tools；需要手机调试时再安装 platform-tools。接受许可证和安装组件的动作由用户执行。
-4. Gradle wrapper 首次构建会把可再生缓存写入用户 Gradle 目录，不会写入 portable 或 Git 仓库。
+- 金币 `999999999`；
+- 角色等级、经验、HP/MP、基础参数和项目中识别到的自定义变量（例如淫欲、感度、开发/关系等）；
+- 免费物品商店（只提示按需购买，不设置购买限额保护）；
+- 可逆无敌；关闭时只移除作弊增加量，保留无敌期间的升级、装备和正常变化；
+- 回想房间传送与返回原位置；
+- 战斗中强制胜利或失败。
 
-这里的 Gradle 用户目录是跨项目共用的 `GRADLE_USER_HOME`，不是某个游戏专属缓存。构建完成后工具不会自动删除它：保留依赖和 wrapper 分发包可以让后续游戏更快、也能减少离线构建失败。只有磁盘紧张或缓存损坏时，关闭构建进程后再手动清理；下一次构建可能重新下载依赖。项目级 `.work` 暂存产物与它不同，属于可再生的构建审计数据；确认不再需要报告和日志后可单独清理，但不要把 `.state`、存档、原游戏目录当作缓存删除。
+动态菜单依赖项目的 `$dataSystem.variables`、`$dataSystem.switches` 和地图信息。未命名或语义无法判断的字段不会全部暴露，避免把未知变量误当成作弊项；请在游戏内核对效果。作弊可能破坏事件、数值或存档，使用前务必复制存档。
 
-## 构建、签名与安装 APK
+## 覆盖更新与存档
 
-命令行可先检查项目，再执行完整 run（Key/密码只使用安全来源）：
+这是转换出来的游戏 APK 的升级规则，不是工具本身的更新规则：
 
-```powershell
-$env:PYTHONPATH = (Resolve-Path .\game2apk-tool\src).Path
-python .\game2apk-tool\scripts\game2apk.py inspect ".\我的MV项目"
-python .\game2apk-tool\scripts\game2apk.py run ".\我的MV项目" `
-  --template .\game2apk-tool\templates\android-rpgmv `
-  --version-code 7 --version-name 1.2.0 `
-  --sign-password-prompt
-```
+1. 新 APK 保持相同 `applicationId` 和同一签名证书；
+2. versionCode 递增；
+3. 使用系统覆盖安装或 `adb install -r`；
+4. 不要卸载应用、清除数据或更换 keystore。
 
-浏览器前端构建完成后会显示 APK 路径、SHA-256、签名候选和静态报告。安装到已连接设备前确认包名/证书与现有版本一致：
+示例：
 
 ```powershell
 adb devices
-adb install -r "D:\\output\\game2apk.apk"
+adb install -r "D:\output\game2apk.apk"
 ```
 
-`adb install -r` 只覆盖安装，不清除数据；若系统提示签名不一致，停止操作并检查是否误用了另一份 keystore。不要为了“修复安装”而卸载应用，否则存档可能丢失。
+这样 WebView localStorage、RPG Maker 存档和设置才有机会保留。若系统提示签名冲突，停止安装并检查是否误用了另一份 keystore。
 
-## 故障排查
+工具 portable 的更新则是：关闭旧的 `game2apk-ui.exe`，把新 ZIP 解压到新目录，再运行新目录中的 `.\game2apk-ui.exe`。`%APPDATA%\game2apk-tool\toolchain.json` 不随 portable 目录移动；旧目录中的 `.state`、Gradle 缓存和项目文件请按需保留，不要把它们上传到 GitHub。
 
-| 现象 | 处理 |
-| --- | --- |
-| 启动提示缺 SDK/JDK/aapt2/zipalign/apksigner | 在工具链卡片选择实际 SDK/JDK 根目录并保存；SDK 根目录应直接包含 `platforms`、`build-tools`，JDK 根目录应直接包含 `bin\\java.exe`。 |
-| 已安装 Android Studio 但没有被发现 | 检查 `ANDROID_SDK_ROOT`、`ANDROID_HOME`、`JAVA_HOME` 和 PATH，或手动选择目录；保存的配置位于 `%APPDATA%\\game2apk-tool\\toolchain.json`。 |
-| Gradle 下载或构建失败 | 检查网络/代理和磁盘空间，删除用户 Gradle 缓存中的不完整下载后重试；不要删除当前项目源码、`.state` 或存档。 |
-| APK 安装失败“签名冲突” | 使用原 applicationId 对应的 keystore；不能用新随机证书覆盖旧安装。 |
-| 覆盖后找不到存档 | 确认使用 `adb install -r`、相同包名和相同签名，且没有清除 Android 应用数据；检查游戏内存档目录和 WebView storage。 |
-| 手机没有声音 | 先确认原 MV 项目包含音频；加密音频移动端必须使用 `.ogg → .rpgmvo`，并在系统音量/蓝牙路由可用时重新启动游戏。 |
-| 触屏选项/移动/互动异常 | 检查是否点击了悬浮控制区；单指点击游戏区保持原 MV 触摸，双指才是返回/取消，长按才是文本加速。 |
-| 作弊器造成事件或数值异常 | 回退到使用作弊前的存档；免费商店和强制胜负没有“购买限额保护”，请按需使用并预留可恢复备份。 |
+## 命令行与源码运行
 
-## 分享前检查清单
+portable 兼容入口：
 
-```text
-[ ] GitHub 只包含工具源码、模板、前端资源、测试和文档
-[ ] 未提交 APK/AAB、原游戏/www、存档、.jks/.keystore、.state、DPAPI 或 API Key
-[ ] Release portable 扫描无 .rpgsave、密钥、密码字段和 APK
-[ ] 给他人的安装说明要求同包名/同证书 + adb install -r
-[ ] 明确说明 DeepSeek 是可选第三方传输，作弊功能可能破坏存档
+```powershell
+.\game2apk-tool.exe --cli --help       # 原有脚本式命令行
+.\game2apk-tool.exe --backend --port 0 # 无 UI 本机后台
+.\game2apk-tool.exe --web              # 兼容：直接打开浏览器前端
+.\game2apk-tool.exe --legacy-gui      # 仅排障使用的旧 Tk 界面
 ```
+
+从源码运行需要 Windows、Python 3.11（`<3.12`）、JDK 17、Gradle wrapper 和 Android SDK build-tools；项目运行时 Python 依赖仅标准库，Node.js 只用于 MV 回归脚本。
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path .\\game2apk-tool\\src).Path
+python .\\game2apk-tool\\scripts\\game2apk.py --help
+python .\\game2apk-tool\\tests\\run_tests.py
+python -m game2apk.ui_launcher
+```
+
+构建 portable：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\\game2apk-tool\\scripts\\build-portable.ps1
+```
+
+## 测试与安全边界
+
+测试覆盖路径逃逸、raw-secret 拒绝、日志/argv 脱敏、ZIP 规范化碰撞、翻译中文检测与占位符保护、前端 API 会话、MV 触摸/按键/音频/作弊器桥接和 Android 模板静态契约。运行：
+
+```powershell
+python .\\game2apk-tool\\tests\\run_tests.py
+```
+
+GitHub 仓库和 Release 只包含工具源码、干净模板、前端资源、测试和文档。严禁提交或上传：
+
+- 原游戏目录、`www`、加密密钥和任何未授权资源；
+- `.apk`、`.aab`、`.rpgsave`、存档、`.state`；
+- `.jks`、`.keystore`、DPAPI 凭据、签名密码和 API Key。
+
+## 文档
+
+- [桌面前端与后台生命周期](game2apk-tool/docs/desktop-frontend.md)
+- [Android 工具链配置](game2apk-tool/docs/desktop-toolchain.md)
+- [翻译性能、思考模式与缓存](game2apk-tool/docs/translation-performance.md)
+- [存档保留与覆盖升级](game2apk-tool/docs/storage-and-upgrade.md)
+- [安全修复与静态验收](game2apk-tool/docs/06-security-remediation-and-rebuild.md)
+
+## 许可证与版权
+
+本仓库的公开内容是迁移工具和模板代码。第三方 Android/Gradle/DeepSeek 服务遵循其各自许可与条款。使用者应自行确认游戏内容、翻译文本和生成 APK 的版权与分发权限。
