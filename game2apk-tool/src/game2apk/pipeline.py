@@ -42,6 +42,7 @@ def stage_manifest_from_dict(data: dict[str, Any]) -> StageManifest:
         manifest_path=data.get("manifestPath"),
         run_id=data.get("runId"),
         source_snapshot_after_sha256=data.get("sourceSnapshotAfterSha256"),
+        allowed_modified_files=list(data.get("allowedModifiedFiles", [])),
     )
 
 
@@ -72,7 +73,73 @@ class PipelineService:
         return recommend_skip_translation(extract_safe_entries(stage.staged_www))
 
     def translate(self, stage: StageManifest, **kwargs: Any) -> TranslationReport:
-        return TranslationService(self.progress, self.cancel_event).translate(stage.staged_www, memory_path=self.state_root / "translation-memory.json", **kwargs)
+        report = TranslationService(self.progress, self.cancel_event).translate(
+            stage.staged_www,
+            memory_path=self.state_root / "translation-memory.json",
+            **kwargs,
+        )
+        self._record_translation_modifications(stage, report)
+        return report
+
+    def _record_translation_modifications(self, stage: StageManifest, report: TranslationReport) -> None:
+        """Record only successful translation edits in the stage manifest.
+
+        The verifier still hashes every staged asset.  Data JSON and the MV
+        package metadata changed by the explicitly enabled translation pass
+        are the sole additional exceptions, and they must be copied files
+        from this same stage.
+        """
+
+        if not report.modified_files or not stage.manifest_path:
+            return
+        manifest_path = Path(stage.manifest_path).resolve(strict=False)
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise BlockedError(f"cannot update stage manifest after translation: {exc}") from exc
+        copied = data.get("copiedFiles")
+        if not isinstance(copied, list):
+            raise BlockedError("stage manifest copiedFiles is invalid")
+        copied_paths = {
+            str(item.get("path", "")).replace("\\", "/").lstrip("/")
+            for item in copied
+            if isinstance(item, dict) and isinstance(item.get("path"), str)
+        }
+        safe: set[str] = set()
+        for raw in report.modified_files:
+            relative = str(raw).replace("\\", "/").lstrip("/")
+            if (
+                not relative
+                or relative.startswith("../")
+                or "/../" in relative
+                or not (relative.casefold().startswith("data/") or relative.casefold() == "package.json")
+                or not relative.casefold().endswith(".json")
+                or relative not in copied_paths
+            ):
+                raise BlockedError(f"translation modified file is outside the safe data allowlist: {relative}")
+            safe.add(relative)
+        existing = data.get("allowedModifiedFiles", [])
+        if existing is None:
+            existing = []
+        if not isinstance(existing, list) or any(not isinstance(item, str) for item in existing):
+            raise BlockedError("stage manifest allowedModifiedFiles is invalid")
+        combined = set()
+        for raw in existing:
+            relative = raw.replace("\\", "/").lstrip("/")
+            if (
+                not relative
+                or relative.startswith("../")
+                or "/../" in relative
+                or not (relative.casefold().startswith("data/") or relative.casefold() == "package.json")
+                or not relative.casefold().endswith(".json")
+                or relative not in copied_paths
+            ):
+                raise BlockedError(f"stage manifest allowlist contains an unsafe file: {relative}")
+            combined.add(relative)
+        combined.update(safe)
+        data["allowedModifiedFiles"] = sorted(combined)
+        atomic_write_json(manifest_path, {**data, "updatedAtUtc": now_utc()})
+        stage.allowed_modified_files = sorted(combined)
 
     def build(
         self,

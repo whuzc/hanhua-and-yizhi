@@ -473,16 +473,22 @@ class JobManager:
                 if job.cancel_event.is_set():
                     raise CancelledError("build cancelled")
                 verification = service.verify(result, request.config, install=False)
-                promoted = service.promote(verification, request.config) if verification.signature_candidate else None
+                promoted = service.promote(verification, request.config) if verification.signature_candidate and verification.passed else None
+                verification_passed = bool(verification.passed and verification.signature_candidate and promoted)
                 partial.update(
                     {
                         "signing": _json_safe(signing),
                         "verification": _json_safe(verification),
                         "distApkPath": str(promoted) if promoted else None,
+                        "verificationPassed": verification_passed,
                     }
                 )
                 job.set_result(partial)
-                job.finish_completed("build and static verification completed" if verification.passed else "build completed; static verification needs review")
+                job.finish_completed(
+                    "build and static verification completed"
+                    if verification_passed
+                    else "build completed; static verification failed; no distributable APK"
+                )
             except CancelledError:
                 job.finish_cancelled()
             except Exception as exc:

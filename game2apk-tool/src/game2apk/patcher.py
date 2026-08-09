@@ -105,6 +105,59 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
       [2034, '口开发度'], [2035, '穴持久度'], [2036, '尻持久度'], [2037, '口持久度'],
       [2001, '淫臭'], [2085, '发情值'], [2086, '媚药侵染度'], [1990, '回想义务次数'], [1991, '回想义务金额']
     ];
+    // Keep the old game's known fields as a fallback, but build the visible
+    // advanced menu from the loaded MV database whenever possible.  This lets
+    // the same APK template work with games that name libido/sensitivity,
+    // development, affection, or other custom variables differently.
+    cheat.legacyCustomFields = cheat.customFields.slice();
+    cheat.customFields = cheat.customFields.slice();
+    cheat.switchFields = [];
+    cheat.recallCandidates = [];
+    cheat.dynamicCatalog = { variables: [], switches: [], recallMaps: [] };
+    cheat.escapeHtml = function (value) {
+      return String(value == null ? '' : value).replace(/[&<>\"']/g, function (ch) {
+        return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', "'": '&#39;' })[ch];
+      });
+    };
+    cheat.classifyField = function (label) {
+      var text = String(label || '').toLowerCase();
+      if (/淫|エロ|lust|lewd|libido|色情/.test(text)) return '欲望';
+      if (/感度|敏感|sensitivity|sensitive|胸|口|尻|穴/.test(text)) return '感度';
+      if (/開発|开发|development|経験|exp|stup/.test(text)) return '成长';
+      if (/好感|affection|love|亲密|信頼|信赖/.test(text)) return '关系';
+      if (/回想|recollection|gallery|scene/.test(text)) return '回想';
+      return '自定义';
+    };
+    cheat.discover = function () {
+      var variables = global.$dataSystem && global.$dataSystem.variables || [];
+      var discovered = [], i, label;
+      for (i = 1; i < variables.length && discovered.length < 256; i++) {
+        label = String(variables[i] || '').trim();
+        if (label) discovered.push([i, label, cheat.classifyField(label)]);
+      }
+      // If a title does not name its variables, preserve the prior game's
+      // explicit safe list rather than exposing every numeric slot blindly.
+      cheat.customFields = discovered.length ? discovered : cheat.legacyCustomFields.slice();
+      var switches = global.$dataSystem && global.$dataSystem.switches || [];
+      cheat.switchFields = [];
+      for (i = 1; i < switches.length && cheat.switchFields.length < 128; i++) {
+        label = String(switches[i] || '').trim();
+        if (label) cheat.switchFields.push([i, label]);
+      }
+      var infos = global.$dataMapInfos || [], maps = [];
+      for (i = 1; i < infos.length; i++) {
+        if (!infos[i] || !infos[i].name) continue;
+        label = String(infos[i].name).trim();
+        if (/回想|回憶|recollection|gallery|scene|event/i.test(label)) maps.push([i, label]);
+      }
+      // The current title's formal room is retained only when its map exists;
+      // another game must opt in through a detected map name.
+      if (!maps.length && infos[136] && infos[136].name) maps.push([136, String(infos[136].name)]);
+      cheat.recallCandidates = maps;
+      cheat.recallMapIds = maps.map(function (item) { return item[0]; });
+      cheat.dynamicCatalog = { variables: cheat.customFields.slice(), switches: cheat.switchFields.slice(), recallMaps: maps.slice() };
+      return cheat.dynamicCatalog;
+    };
     function finite(v, fallback) { v = Number(v); return isFinite(v) ? v : fallback; }
     function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, Math.floor(finite(v, lo)))); }
     function actors() { return global.$gameParty && $gameParty.members ? $gameParty.members() : []; }
@@ -131,6 +184,14 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
     cheat.applyCustom = function () {
       if (!global.$gameVariables || !$gameVariables.setValue) return;
       for (var i = 0; i < cheat.customFields.length; i++) { var id = cheat.customFields[i][0], e = document.getElementById('g2a-var-' + id); if (e) $gameVariables.setValue(id, clamp(e.value, 0, 999999)); }
+      cheat.refresh();
+    };
+    cheat.applySwitches = function () {
+      if (!global.$gameSwitches || !$gameSwitches.setValue) return;
+      for (var i = 0; i < cheat.switchFields.length; i++) {
+        var id = cheat.switchFields[i][0], e = document.getElementById('g2a-switch-' + id);
+        if (e) $gameSwitches.setValue(id, !!e.checked);
+      }
       cheat.refresh();
     };
     cheat.godValue = 999999;
@@ -237,7 +298,13 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
       cheat.state.recall = { mapId: $gameMap.mapId(), x: $gamePlayer.x, y: $gamePlayer.y, direction: $gamePlayer.direction(), fade: 0 };
       // Map136 is the formal event-recall room.  (10,8) is a passable
       // staging tile, deliberately not an Action Button event tile.
-      $gamePlayer.reserveTransfer(136, 10, 8, 2, 0); cheat.close();
+      var recallSelection = document.getElementById('g2a-recall-map');
+      var targetId = recallSelection ? clamp(recallSelection.value, 1, 999999) : cheat.recallMapIds[0];
+      if (cheat.recallMapIds.indexOf(targetId) < 0) targetId = cheat.recallMapIds[0];
+      if (!targetId) { alert('未识别到回想/场景地图，请先检查游戏数据库命名。'); return; }
+      var targetX = targetId === 136 ? 10 : 1, targetY = targetId === 136 ? 8 : 1;
+      // Legacy safe target was reserveTransfer(136, 10, 8, 2, 0).
+      $gamePlayer.reserveTransfer(targetId, targetX, targetY, 2, 0); cheat.close();
     };
     cheat.installShop = function () {
       if (!global.Scene_Shop || Scene_Shop.prototype._game2apkShopHook) return;
@@ -288,18 +355,31 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
       var vals = { level:a.level, exp:a.currentExp ? a.currentExp() : 0, hp:a.hp, mp:a.mp, atk:a.param(2), def:a.param(3), mat:a.param(4), mdf:a.param(5), agi:a.param(6), luk:a.param(7) };
       Object.keys(vals).forEach(function(k){setText('g2a-'+k, vals[k]);});
       if (global.$gameVariables) cheat.customFields.forEach(function(f){setText('g2a-var-'+f[0], $gameVariables.value(f[0]));});
+      if (global.$gameSwitches) cheat.switchFields.forEach(function(f){var e=document.getElementById('g2a-switch-'+f[0]); if(e) e.checked=!!$gameSwitches.value(f[0]);});
       var g = document.getElementById('g2a-god'); if (g) g.checked = !!cheat.state.god;
     };
     cheat.close = function () { var p = document.getElementById('game2apk-cheat'); if (p) p.remove(); };
     cheat.toggle = function () {
       var old = document.getElementById('game2apk-cheat'); if (old) { old.remove(); return; }
       var p = document.createElement('div'); p.id='game2apk-cheat'; p.style.cssText='position:fixed;left:4%;top:4%;width:92%;max-height:88%;overflow:auto;z-index:2147483647;background:rgba(16,18,28,.96);color:#fff;padding:14px;border:2px solid #8ab4ff;border-radius:10px;font:14px sans-serif;box-sizing:border-box';
+      cheat.discover();
       var a=actors(), h='<div style="font-size:18px;font-weight:bold">内置作弊器 <button id="g2a-close" style="float:right">关闭</button></div><p style="color:#ffd27f">修改后建议手动保存。高级变量仅开放白名单，数值限制为 0～999999。</p><button id="g2a-gold">获得 999999999 金币</button> <button id="g2a-shop">免费商店</button><label style="margin-left:12px"><input id="g2a-god" type="checkbox"> 无敌（HP/攻击/防御持续提升，可恢复）</label><hr><label>角色 <select id="g2a-actor">'+a.map(function(x,i){return '<option value="'+i+'">'+(x.name?x.name():('角色'+i))+'</option>';}).join('')+'</select></label><div id="g2a-fields"></div><button id="g2a-apply">应用角色数值</button><h4>高级/自定义数值（白名单）</h4><div id="g2a-custom"></div><button id="g2a-apply-custom">应用高级数值</button><hr><button id="g2a-recall">传送到正式回想房间（Map136）</button><small> 离开回想房间会自动返回进入前的位置。</small><hr><div><b>战斗作弊（仅战斗中可用）</b> <button id="g2a-win" disabled>战斗胜利</button> <button id="g2a-lose" disabled>战斗失败</button><small> 强制调用游戏原生战斗结束、奖励/失败及公共事件流程。</small></div>';
       p.innerHTML=h; document.body.appendChild(p);
+      var recallButton = document.getElementById('g2a-recall');
+      if (recallButton && cheat.recallCandidates.length) {
+        var recallSelect = document.createElement('select'); recallSelect.id = 'g2a-recall-map';
+        recallSelect.innerHTML = cheat.recallCandidates.map(function(item){return '<option value="'+item[0]+'">'+cheat.escapeHtml(item[1])+' (#'+item[0]+')</option>';}).join('');
+        recallButton.parentNode.insertBefore(recallSelect, recallButton);
+      } else if (recallButton) recallButton.disabled = true;
       var fields=[['level','等级'],['exp','经验'],['hp','HP'],['mp','MP'],['atk','攻击'],['def','防御'],['mat','魔攻'],['mdf','魔防'],['agi','敏捷'],['luk','幸运']];
       document.getElementById('g2a-fields').innerHTML=fields.map(function(f){return '<label style="display:inline-block;width:32%;margin:3px">'+f[1]+' <input id="g2a-'+f[0]+'" type="number" min="0" max="999999" style="width:75px"></label>';}).join('');
-      document.getElementById('g2a-custom').innerHTML=cheat.customFields.map(function(f){return '<label style="display:inline-block;width:48%;margin:3px">'+f[1]+' <input id="g2a-var-'+f[0]+'" type="number" min="0" max="999999" style="width:90px"></label>';}).join('');
-      document.getElementById('g2a-close').onclick=cheat.close; document.getElementById('g2a-gold').onclick=cheat.addGold; document.getElementById('g2a-shop').onclick=cheat.openShop; document.getElementById('g2a-god').onchange=function(){cheat.toggleGod(this.checked);}; document.getElementById('g2a-apply').onclick=cheat.applyActor; document.getElementById('g2a-apply-custom').onclick=cheat.applyCustom; document.getElementById('g2a-actor').onchange=cheat.refresh; document.getElementById('g2a-recall').onclick=cheat.toRecall; document.getElementById('g2a-win').onclick=function(){cheat.forceBattleResult(0);}; document.getElementById('g2a-lose').onclick=function(){cheat.forceBattleResult(2);};
+      document.getElementById('g2a-custom').innerHTML=cheat.customFields.map(function(f){return '<label style="display:inline-block;width:48%;margin:3px">'+cheat.escapeHtml(f[1])+' <small>['+cheat.escapeHtml(f[2] || '自定义')+']</small> <input id="g2a-var-'+f[0]+'" type="number" min="0" max="999999" style="width:90px"></label>';}).join('');
+      var switchContainer = document.getElementById('g2a-switches');
+      if (!switchContainer) { switchContainer = document.createElement('div'); switchContainer.id = 'g2a-switches'; var customContainer = document.getElementById('g2a-custom'); if (customContainer && customContainer.parentNode) customContainer.parentNode.insertBefore(switchContainer, customContainer.nextSibling); }
+      switchContainer.innerHTML=cheat.switchFields.length ? '<h4>自动识别开关（默认不修改）</h4>'+cheat.switchFields.map(function(f){return '<label style="display:inline-block;width:48%;margin:3px"><input id="g2a-switch-'+f[0]+'" type="checkbox"> '+cheat.escapeHtml(f[1])+'</label>';}).join('') : '<small>未发现已命名的游戏开关。</small>';
+      var switchButton = document.getElementById('g2a-apply-switches');
+      if (!switchButton) { switchButton = document.createElement('button'); switchButton.id = 'g2a-apply-switches'; switchButton.textContent = '应用开关'; if (switchContainer && switchContainer.parentNode) switchContainer.parentNode.insertBefore(switchButton, switchContainer.nextSibling); }
+      document.getElementById('g2a-close').onclick=cheat.close; document.getElementById('g2a-gold').onclick=cheat.addGold; document.getElementById('g2a-shop').onclick=cheat.openShop; document.getElementById('g2a-god').onchange=function(){cheat.toggleGod(this.checked);}; document.getElementById('g2a-apply').onclick=cheat.applyActor; document.getElementById('g2a-apply-custom').onclick=cheat.applyCustom; switchButton.onclick=cheat.applySwitches; document.getElementById('g2a-actor').onchange=cheat.refresh; document.getElementById('g2a-recall').onclick=cheat.toRecall; document.getElementById('g2a-win').onclick=function(){cheat.forceBattleResult(0);}; document.getElementById('g2a-lose').onclick=function(){cheat.forceBattleResult(2);};
       p.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:false}); p.addEventListener('pointerdown',function(e){e.stopPropagation();}); cheat.refresh();
     };
     if (global.setTimeout) (function retry(n){ cheat.installGod(); cheat.installRecall(); cheat.installShop(); if(n>0) setTimeout(function(){retry(n-1);},250); }(40));

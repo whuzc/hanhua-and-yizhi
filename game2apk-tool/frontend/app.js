@@ -340,20 +340,33 @@
     pollFailureCount = 0;
     if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
     if (status === "completed") {
-      setProgress(1, "任务完成");
       const result = job.result || {};
+      let completionLabel = "任务完成";
       if (job.kind === "inspect") {
         const inspection = result.inspection || result;
         inspected = typeof result.buildReady === "boolean" ? result.buildReady : inspection?.status !== "blocked";
         renderTranslationDetection(result.translation);
         log(inspected ? "检查通过" : "检查被阻止", jsonPreview(inspection), inspected ? "success" : "error");
+        completionLabel = inspected ? "检查通过" : "检查失败";
       } else if (job.kind === "download") {
         if (result.health) renderToolchain(result.health);
         log("工具下载并解压完成", jsonPreview(result), "success");
+        completionLabel = "工具链已更新";
       } else {
-        log("构建流程完成", jsonPreview(result), "success");
+        const verification = result.verification || {};
+        const verificationPassed = result.verificationPassed === true
+          || (verification.passed === true && verification.signatureCandidate === true && Boolean(result.distApkPath));
+        completionLabel = verificationPassed
+          ? "构建并验收通过"
+          : "构建完成，但静态验收未通过";
+        log(
+          verificationPassed ? "构建并验收通过" : "构建完成，静态验收未通过",
+          jsonPreview(result),
+          verificationPassed ? "success" : "error",
+        );
       }
-      setText(reportState, job.kind === "inspect" ? (inspected ? "检查通过" : "检查失败") : (job.kind === "download" ? "工具链已更新" : "构建完成"));
+      setProgress(1, completionLabel);
+      setText(reportState, completionLabel);
     } else if (status === "cancelled") {
       setProgress(Number(job.fraction) || 0, "任务已取消");
       log("任务已取消", job.message || "后台已安全停止当前工作。", "warn");

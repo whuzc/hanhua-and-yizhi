@@ -117,8 +117,34 @@ def _stage_asset_check(apk: Path, manifest_path: str | Path | None) -> dict[str,
         # Patcher injects the input bridge in index.html and rewrites MV's
         # encrypted-audio extension selector in rpg_managers.js.  Both are
         # intentional, auditable staged mutations; all other copied assets
-        # must still match the source manifest byte-for-byte.
+        # must still match the source manifest byte-for-byte.  The optional
+        # translation allowlist below may add only staged data JSON or the MV
+        # package metadata file.
         modified = {"assets/www/index.html", "assets/www/js/rpg_managers.js"}
+        allowlist_errors: list[str] = []
+        raw_allowed = data.get("allowedModifiedFiles", [])
+        if raw_allowed is None:
+            raw_allowed = []
+        if not isinstance(raw_allowed, list):
+            allowlist_errors.append("allowedModifiedFiles is not an array")
+            raw_allowed = []
+        for raw in raw_allowed:
+            if not isinstance(raw, str):
+                allowlist_errors.append(str(raw))
+                continue
+            relative = raw.replace("\\", "/").lstrip("/")
+            normalized = _normalize_zip_name(f"assets/www/{relative}")
+            if (
+                not relative
+                or relative.startswith("../")
+                or "/../" in relative
+                or not (relative.casefold().startswith("data/") or relative.casefold() == "package.json")
+                or not relative.casefold().endswith(".json")
+                or normalized not in expected
+            ):
+                allowlist_errors.append(relative)
+                continue
+            modified.add(normalized)
         with zipfile.ZipFile(apk) as archive:
             actual_to_raw: dict[str, str] = {}
             repaired_names: list[str] = []
@@ -152,6 +178,7 @@ def _stage_asset_check(apk: Path, manifest_path: str | Path | None) -> dict[str,
         return {
             "checked": True,
             "passed": not missing and not unexpected and not hash_mismatches
+            and not allowlist_errors
             and not expected_collisions and not actual_collisions,
             "manifestPath": str(manifest),
             "expectedCount": len(expected),
@@ -161,6 +188,12 @@ def _stage_asset_check(apk: Path, manifest_path: str | Path | None) -> dict[str,
             "unexpected": unexpected,
             "hashMismatches": hash_mismatches,
             "modifiedAllowed": sorted(modified & actual),
+            "allowedModifiedFiles": sorted(
+                name.removeprefix("assets/www/")
+                for name in modified
+                if name not in {"assets/www/index.html", "assets/www/js/rpg_managers.js"}
+            ),
+            "allowlistErrors": sorted(set(allowlist_errors)),
             "zipNameRepairCount": len(repaired_names),
             "normalizedNameCollisions": [
                 {
@@ -326,6 +359,8 @@ class VerificationService:
     def promote(report: VerificationReport, dist_dir: str | Path, filename: str | None = None) -> Path:
         if not report.signature_candidate:
             raise ExternalToolError("APK is not a signature candidate; refusing to copy it to dist")
+        if not report.passed:
+            raise ExternalToolError("APK static verification did not pass; refusing to copy it to dist")
         destination_dir = Path(dist_dir).resolve(strict=False)
         destination_dir.mkdir(parents=True, exist_ok=True)
         destination = destination_dir / (filename or Path(report.apk_path).name)

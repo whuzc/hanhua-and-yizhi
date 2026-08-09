@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -88,6 +89,37 @@ class SecurityAndInputContractTests(unittest.TestCase):
             self.assertTrue(result["actualNameCollisions"])
             self.assertTrue(result["normalizedNameCollisions"])
 
+    def test_translation_data_allowlist_accepts_only_manifest_backed_json(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = b'{"message":"Hello"}'
+            translated = b'{"message":"\xe4\xbd\xa0\xe5\xa5\xbd"}'
+            apk = root / "candidate.apk"
+            with zipfile.ZipFile(apk, "w") as archive:
+                archive.writestr("assets/www/data/Map001.json", translated)
+            manifest = root / "stage-manifest.json"
+            manifest.write_text(json.dumps({
+                "copiedFiles": [{
+                    "path": "data/Map001.json",
+                    "sha256": hashlib.sha256(original).hexdigest(),
+                }],
+                "allowedModifiedFiles": ["data/Map001.json"],
+            }), encoding="utf-8")
+            result = _stage_asset_check(apk, manifest)
+            self.assertTrue(result["passed"])
+            self.assertIn("assets/www/data/Map001.json", result["modifiedAllowed"])
+
+            manifest.write_text(json.dumps({
+                "copiedFiles": [{
+                    "path": "data/Map001.json",
+                    "sha256": hashlib.sha256(original).hexdigest(),
+                }],
+                "allowedModifiedFiles": ["js/evil.js"],
+            }), encoding="utf-8")
+            unsafe = _stage_asset_check(apk, manifest)
+            self.assertFalse(unsafe["passed"])
+            self.assertIn("js/evil.js", unsafe["allowlistErrors"])
+
     def test_template_has_nonempty_default_launcher_icon(self) -> None:
         root = Path(__file__).resolve().parents[1]
         manifest = (root / "templates" / "android-rpgmv" / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
@@ -101,13 +133,13 @@ class SecurityAndInputContractTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         config = build_config()
         self.assertEqual(config["applicationId"], "com.game2apk.xianyaoshengcanver22")
-        self.assertEqual(config["versionCode"], 7)
-        self.assertEqual(config["versionName"], "1.2.0")
+        self.assertEqual(config["versionCode"], 8)
+        self.assertEqual(config["versionName"], "1.3.0")
 
         gradle = (root / "templates" / "android-rpgmv" / "app" / "build.gradle").read_text(encoding="utf-8")
         self.assertIn("com.game2apk.xianyaoshengcanver22", gradle)
-        self.assertIn("versionCode Integer.parseInt(requiredOrDefault('game2apkVersionCode', '7'))", gradle)
-        self.assertIn("versionName requiredOrDefault('game2apkVersionName', '1.2.0')", gradle)
+        self.assertIn("versionCode Integer.parseInt(requiredOrDefault('game2apkVersionCode', '8'))", gradle)
+        self.assertIn("versionName requiredOrDefault('game2apkVersionName', '1.3.0')", gradle)
 
         activity = (root / "templates" / "android-rpgmv" / "app" / "src" / "main" / "java" / "com" / "game2apk" / "rpgmv" / "MainActivity.java").read_text(encoding="utf-8")
         store = (root / "templates" / "android-rpgmv" / "app" / "src" / "main" / "java" / "com" / "game2apk" / "rpgmv" / "OverlayStateStore.java").read_text(encoding="utf-8")
@@ -134,7 +166,7 @@ class SecurityAndInputContractTests(unittest.TestCase):
         overlay = (root / "templates" / "android-rpgmv" / "app" / "src" / "main" / "java" / "com" / "game2apk" / "rpgmv" / "OverlayView.java").read_text(encoding="utf-8")
         bridge = (root / "src" / "game2apk" / "patcher.py").read_text(encoding="utf-8")
         self.assertIn("CHEAT_HANDLE", overlay)
-        for token in ("Game2ApkCheat", "999999999", "recallMapIds = [136, 97]", "2010", "2034", "2085"):
+        for token in ("Game2ApkCheat", "999999999", "recallMapIds = [136, 97]", "2010", "2034", "2085", "cheat.discover", "dynamicCatalog", "switchFields"):
             self.assertIn(token, bridge)
 
     def test_desktop_release_separates_console_backend_from_browser_launcher(self) -> None:

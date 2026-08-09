@@ -129,8 +129,8 @@ def _config(args) -> BuildConfig:
 def _common_build_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--app-name", default="仙肴圣餐超魔改 Ver22")
     parser.add_argument("--application-id", default="com.game2apk.xianyaoshengcanver22")
-    parser.add_argument("--version-code", type=int, default=7)
-    parser.add_argument("--version-name", default="1.2.0")
+    parser.add_argument("--version-code", type=int, default=8)
+    parser.add_argument("--version-name", default="1.3.0")
     parser.add_argument("--icon")
 
 
@@ -322,7 +322,7 @@ def main(argv: list[str] | None = None) -> int:
             password = _read_cli_secret(args, "sign_password", "Signing password")
             signing = service.sign(result, config, password=password)
             verification = service.verify(result, config, install=args.adb_install)
-            promoted = service.promote(verification, config) if verification.signature_candidate else None
+            promoted = service.promote(verification, config) if verification.signature_candidate and verification.passed else None
             _emit(
                 {
                     "inspection": inspection.to_dict(),

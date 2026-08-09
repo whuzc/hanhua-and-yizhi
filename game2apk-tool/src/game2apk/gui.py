@@ -38,8 +38,8 @@ class WizardApp:
         self.template_var = tk.StringVar(value=str(self.tool_root / "templates" / "android-rpgmv"))
         self.app_name_var = tk.StringVar(value="仙肴圣餐超魔改 Ver22")
         self.application_id_var = tk.StringVar(value="com.game2apk.xianyaoshengcanver22")
-        self.version_code_var = tk.IntVar(value=7)
-        self.version_name_var = tk.StringVar(value="1.2.0")
+        self.version_code_var = tk.IntVar(value=8)
+        self.version_name_var = tk.StringVar(value="1.3.0")
         self.translate_var = tk.BooleanVar(value=False)
         self.confirm_var = tk.BooleanVar(value=False)
         self.api_key_var = tk.StringVar()
@@ -344,7 +344,7 @@ class WizardApp:
                 raise Game2ApkError(f"Gradle 构建失败，退出码 {result.return_code}；日志：{result.log_path}")
             self.service.sign(result, config, password=settings["sign_password"])
             verification = self.service.verify(result, config, install=False)
-            promoted = self.service.promote(verification, config) if verification.signature_candidate else None
+            promoted = self.service.promote(verification, config) if verification.signature_candidate and verification.passed else None
             self.queue.put(("complete", (result, verification, promoted)))
         except Exception as exc:
             self.queue.put(("error", exc))

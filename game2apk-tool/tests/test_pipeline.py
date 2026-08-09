@@ -16,6 +16,7 @@ from game2apk.errors import BlockedError, ConfigurationError
 from game2apk.inspector import inspect_game
 from game2apk.models import BuildConfig, ToolchainInfo
 from game2apk.patcher import patch_staged_www
+from game2apk.pipeline import PipelineService
 from game2apk.security import create_work_marker, redact_text, safe_remove_workdir
 from game2apk.signing import SigningService
 from game2apk.staging import StageService
@@ -98,8 +99,8 @@ class PipelineTests(unittest.TestCase):
     def test_default_update_identity_and_version_are_monotonic(self) -> None:
         data = build_config(control=default_control_config())
         self.assertEqual(data["applicationId"], "com.game2apk.xianyaoshengcanver22")
-        self.assertEqual(data["versionCode"], 7)
-        self.assertEqual(data["versionName"], "1.2.0")
+        self.assertEqual(data["versionCode"], 8)
+        self.assertEqual(data["versionName"], "1.3.0")
 
     def test_inspect_reports_mv_yep_resolution_keys_and_encryption_without_key(self) -> None:
         report = inspect_game(self.game)
@@ -268,6 +269,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(report.entries_total, 1)
         self.assertEqual(report.entries_skipped_chinese, 1)
         self.assertEqual(report.entries_applied, 1)
+        self.assertEqual(report.modified_files, ["data/System.json"])
         payload_items = json.loads(transport.calls[0]["messages"][-1]["content"].split("INPUT=", 1)[1])
         self.assertEqual(len(payload_items), 1)
         self.assertNotIn("\u4e2d\u6587", json.dumps(payload_items, ensure_ascii=False))
@@ -295,6 +297,30 @@ class PipelineTests(unittest.TestCase):
         self.assertGreater(second.entries_cached, 0)
         self.assertEqual(len(second_transport.calls), 0)
         self.assertIn("你好", (first_www / "data" / "Map001.json").read_text(encoding="utf-8"))
+
+    def test_pipeline_records_translation_allowlist_in_stage_manifest(self) -> None:
+        report = inspect_game(self.game)
+        stage = StageService().stage(report, self.root / ".work", minimum_free_bytes=0)
+
+        def responder(payload):
+            items = json.loads(payload["messages"][-1]["content"].split("INPUT=", 1)[1])
+            translated = [
+                {"id": item["id"], "segments": [segment.replace("Hello", "你好") for segment in item["segments"]]}
+                for item in items
+            ]
+            return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps({"translations": translated}, ensure_ascii=False)}}]}
+
+        translation = PipelineService(self.root).translate(
+            stage,
+            model="deepseek-v4-flash",
+            api_key="fake",
+            transport=FakeTransport(responder=responder),
+            confirmed_third_party=True,
+            force=True,
+        )
+        self.assertIn("data/Map001.json", translation.modified_files)
+        manifest = json.loads(Path(stage.manifest_path).read_text(encoding="utf-8"))
+        self.assertIn("data/Map001.json", manifest["allowedModifiedFiles"])
 
     def test_bad_translation_is_not_applied(self) -> None:
         entries = extract_safe_entries(self.www)
@@ -408,18 +434,18 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn("android { androidResources", rendered_settings.read_text(encoding="utf-8"))
         def fake_tool(command):
             if "aapt2" in command[0]:
-                return 0, "package: name='com.game2apk.xianyaoshengcanver22' versionCode='7' versionName='1.2.0'\napplication: label='Demo' icon='@drawable/game2apk_launcher'\ndebuggable=false"
+                return 0, "package: name='com.game2apk.xianyaoshengcanver22' versionCode='8' versionName='1.3.0'\napplication: label='Demo' icon='@drawable/game2apk_launcher'\ndebuggable=false"
             if "apksigner" in command[0]:
                 return 0, "Verified using v2 scheme\nSigner #1 certificate SHA-256 digest: AA:BB"
             return 0, "Verification successful"
 
         with mock.patch("game2apk.verifier._run", side_effect=fake_tool):
-            verified = VerificationService().verify(result.apk_path, toolchain, result.started_at_utc, expected_application_id=self._config().application_id, expected_version_code=7)
-        self.assertTrue(verified.passed)
-        self.assertTrue(verified.signature_candidate)
-        self.assertFalse(verified.device["verified"])
-        self.assertTrue(verified.permissions["passed"])
-        self.assertTrue(verified.stage_assets["passed"])
+            verified = VerificationService().verify(result.apk_path, toolchain, result.started_at_utc, expected_application_id=self._config().application_id, expected_version_code=8)
+            self.assertTrue(verified.passed)
+            self.assertTrue(verified.signature_candidate)
+            self.assertFalse(verified.device["verified"])
+            self.assertTrue(verified.permissions["passed"])
+            self.assertTrue(verified.stage_assets["passed"])
 
     def test_signing_state_never_reports_plain_password(self) -> None:
         status = SigningService(self.root / ".state").status("com.game2apk.test")

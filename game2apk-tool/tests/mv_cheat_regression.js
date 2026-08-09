@@ -7,7 +7,8 @@ for (const token of [
   'gainHp', 'changeLevel', '2010', '2034', '2085', 'reserveTransfer',
   'processVictory', 'processDefeat', 'g2a-win', 'g2a-lose', 'isBattleActive',
   'paramDelta', 'naturalHp', 'godHp', 'battleOverride', 'refreshBattleControls', '仅能在战斗进行中使用',
-  'recallMapIds = [136, 97]'
+  'recallMapIds = [136, 97]', 'cheat.discover', 'dynamicCatalog', 'classifyField',
+  'switchFields', 'recallCandidates', '自动识别'
 ]) {
   if (!bridge.includes(token)) throw new Error(`missing cheat contract: ${token}`);
 }

@@ -1103,6 +1103,14 @@ class TranslationService:
         report.failures.extend(apply_failures)
         report.entries_applied = len(translations) - len(apply_failures)
         report.live_api_used = isinstance(transport, DeepSeekTransport) and bool(pending)
+        failed_ids = {failure.entry_id for failure in apply_failures}
+        report.modified_files = sorted(
+            {
+                entry.relative_file
+                for entry in entries
+                if entry.entry_id in translations and entry.entry_id not in failed_ids
+            }
+        )
         for entry in entries:
             candidate = translations.get(entry.entry_id)
             if candidate is None:

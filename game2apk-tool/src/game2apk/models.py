@@ -128,6 +128,9 @@ class StageManifest:
     manifest_path: str | None = None
     run_id: str | None = None
     source_snapshot_after_sha256: str | None = None
+    # Translation may intentionally change a small, auditable set of data
+    # files after staging. Keep this empty for ordinary builds.
+    allowed_modified_files: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -150,6 +153,7 @@ class StageManifest:
             "manifestPath": self.manifest_path,
             "runId": self.run_id,
             "sourceSnapshotAfterSha256": self.source_snapshot_after_sha256,
+            "allowedModifiedFiles": list(self.allowed_modified_files),
         }
 
 
@@ -213,6 +217,10 @@ class TranslationReport:
     source_entries_total: int | None = None
     entries_skipped_chinese: int = 0
     entries_skipped_non_text: int = 0
+    # Relative files that were successfully changed in the staged project.
+    # The verifier uses this narrow, report-backed allowlist for translation
+    # edits instead of treating every staged file as mutable.
+    modified_files: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -233,6 +241,7 @@ class TranslationReport:
             "sourceEntriesTotal": self.source_entries_total if self.source_entries_total is not None else self.entries_total,
             "entriesSkippedChinese": self.entries_skipped_chinese,
             "entriesSkippedNonText": self.entries_skipped_non_text,
+            "modifiedFiles": list(self.modified_files),
         }
 
 

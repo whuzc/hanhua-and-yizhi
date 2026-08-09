@@ -1,6 +1,6 @@
 # 存档与覆盖更新契约
 
-当前发布候选为 versionCode `7`、versionName `1.2.0`，从 6/1.1.0 原地升级；包名、签名和 WebView 存储契约保持不变。
+当前发布候选为 versionCode `8`、versionName `1.3.0`，从 7/1.2.0 原地升级；包名、签名和 WebView 存储契约保持不变。
 
 ## 结论
 
@@ -8,7 +8,7 @@
 
 1. `applicationId` 保持 `com.game2apk.xianyaoshengcanver22`；
 2. 新 APK 使用创建旧 APK 时的同一签名证书；
-3. 新 APK 的 `versionCode` 大于旧 APK（本次默认值为 `7`，`versionName` 为 `1.2.0`）；
+3. 新 APK 的 `versionCode` 大于旧 APK（本次默认值为 `8`，`versionName` 为 `1.3.0`）；
 4. 安装使用 `adb install -r <new.apk>` 或系统的“更新安装”，不卸载、不清除应用数据。
 
 RPG Maker MV 的 `localStorage` 存档位于应用私有 WebView 数据目录，origin 固定为
@@ -28,5 +28,5 @@ RPG Maker MV 的 `localStorage` 存档位于应用私有 WebView 数据目录，
 
 ## 本次版本
 
-默认配置从 `versionCode=6`/`1.1.0` 提升为 `versionCode=7`/`1.2.0`，包名保持不变。这只满足 Android 的更新判定，
+默认配置从 `versionCode=7`/`1.2.0` 提升为 `versionCode=8`/`1.3.0`，包名保持不变。这只满足 Android 的更新判定，
 并不会主动迁移、重置或删除任何存档。

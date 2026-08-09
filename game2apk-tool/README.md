@@ -1,6 +1,6 @@
 # game2apk-tool
 
-当前发布候选为 versionCode `7`、versionName `1.2.0`（由 6/1.1.0 升级），包含可逆无敌、战斗胜负控制、作弊器面板、事件回想传送和加密音频修复。
+当前发布候选为 versionCode `8`、versionName `1.3.0`（由 7/1.2.0 升级），包含动态作弊菜单、可逆无敌、战斗胜负控制、事件回想传送和加密音频修复。
 
 Windows 本地工具：检查 RPG Maker MV、在受标记的 `.work` 副本中暂存和补丁、可选离线翻译、Gradle 构建、稳定签名并做 APK 静态验收。原游戏目录只读；本项目不生成 AAB。
 
@@ -13,12 +13,14 @@ $env:PYTHONPATH = (Resolve-Path .\game2apk-tool\src).Path
 python .\game2apk-tool\scripts\game2apk.py inspect ".\仙肴圣餐超魔改 Ver22"
 python .\game2apk-tool\scripts\game2apk.py run ".\仙肴圣餐超魔改 Ver22" `
   --template .\game2apk-tool\templates\android-rpgmv `
-  --version-code 7 --version-name 1.2.0
+  --version-code 8 --version-name 1.3.0
 ```
 
 签名密码默认优先读取稳定 `applicationId` 对应的 Windows DPAPI 凭据。首次创建或 standalone 签名只能使用 `--password-env NAME`、`--password-stdin` 或 `--password-prompt`；`run` 对应为 `--sign-password-env NAME`、`--sign-password-stdin` 或 `--sign-password-prompt`。DeepSeek 只允许 `--api-key-env NAME`、`--api-key-stdin` 或 `--api-key-prompt`，其中 argv 只出现环境变量名，不出现秘密值。旧的 `--api-key VALUE`、`--password VALUE`、`--sign-password VALUE` 及等价 raw-secret 参数会被拒绝。
 
-本次更新目标 APK 固定为 `com.game2apk.xianyaoshengcanver22`、versionCode `7`、versionName `1.2.0`。稳定 keystore 位于 `.state/signing/<applicationId>/`，密码不写入日志、报告、APK、dist 或子进程 argv。覆盖安装必须继续使用同一 applicationId、同一签名证书，并使用 `adb install -r`；不要卸载或清除应用数据，否则 WebView 存档无法保留。详见 `docs/storage-and-upgrade.md`。
+本次更新目标 APK 固定为 `com.game2apk.xianyaoshengcanver22`、versionCode `8`、versionName `1.3.0`。稳定 keystore 位于 `.state/signing/<applicationId>/`，密码不写入日志、报告、APK、dist 或子进程 argv。覆盖安装必须继续使用同一 applicationId、同一签名证书，并使用 `adb install -r`；不要卸载或清除应用数据，否则 WebView 存档无法保留。详见 `docs/storage-and-upgrade.md`。
+
+签名密码留空不等于“静默生成未签名 APK”：如果当前用户已有该 applicationId 的 DPAPI 签名状态，工具会自动使用它；没有可用状态且未提供密码时任务会阻止签名。Gradle 默认输出名可能仍是 `app-release-unsigned.apk`，因为工具对该文件执行了 signed-in-place；是否可安装以 `signing-report.json` 的 `signedInPlace` 和 `verification-report.json` 的 `apksigner.passed/signatureCandidate` 为准。只有静态验收通过的 APK 才会复制到 `dist`。
 
 ## Android 输入契约
 
@@ -65,9 +67,9 @@ portable 不得包含原游戏、存档、APK、AAB、keystore、DPAPI 文件或
 - **可选 DeepSeek 翻译**：默认不联网、不翻译。勾选强制翻译并明确确认第三方传输后，使用环境变量名、stdin 或隐藏 prompt 提供 Key；Key 不出现在 argv、日志、报告、APK 或 portable。建议先备份并逐段审阅机器翻译结果。
 
 翻译默认使用官方模型 `deepseek-v4-flash`（输入 `v4flash` / `v4-flash` 会自动规范化），默认开启 thinking 并使用 `high` 强度；界面可切换关闭 thinking，或选择 `low / high / max`，以在自然度和速度之间取舍。默认每批 20 个文本块、最多 4 路并发，并启用相同文本去重、翻译缓存和限流重试。RPG Maker MV 的连续对话行会作为一个完整消息块交给模型，按上下文翻译并保留行数/顺序，不会按单词逐个翻译。可用 `GAME2APK_TRANSLATION_CONCURRENCY`（1–8）与 `GAME2APK_TRANSLATION_BATCH_SIZE`（1–100）按账号限流情况调整。完整策略与取舍见 [docs/translation-performance.md](docs/translation-performance.md)。
-- **签名与静态验收**：沿用固定 `applicationId=com.game2apk.xianyaoshengcanver22`、`versionCode=7`、`versionName=1.2.0` 的升级身份，自动完成 zipalign/apksigner/manifest/资源清单等静态检查；没有连接手机时不会宣称已完成实机验证。
+- **签名与静态验收**：沿用固定 `applicationId=com.game2apk.xianyaoshengcanver22`、`versionCode=8`、`versionName=1.3.0` 的升级身份，自动完成 zipalign/apksigner/manifest/资源清单等静态检查；没有连接手机时不会宣称已完成实机验证。
 - **手机输入契约**：悬浮层保留确认、取消、ESC、立绘和四向方向键；方向键按住持续、抬起立即释放。单指点击游戏区保持 MV 原触摸语义（选项、地图目的地、dash、NPC/事件互动），单指长按加速文本；双指轻点发送一次返回/取消，三指和多余触点被忽略。悬浮层可以隐藏，避免遮挡原游戏。
-- **内置作弊器**：右上角入口可打开金币 `999999999`、角色字段编辑（等级、经验、HP/MP、基础参数及游戏存在的淫欲等扩展字段）、免费物品商店、无敌、回想房间传送、战斗强制胜利/失败。免费商店不做购买限额保护，仅提示按需购买；无敌开启时保存当前 HP/攻击/防御快照，关闭时按角色当前正常值恢复而不是覆盖升级后新值。作弊可能破坏事件、数值或存档，请复制存档后按需使用。
+- **内置作弊器**：右上角入口可打开金币 `999999999`、角色字段编辑（等级、经验、HP/MP、基础参数及游戏存在的淫欲等扩展字段）、免费物品商店、无敌、回想房间传送、战斗强制胜利/失败。高级菜单在游戏运行时读取 `$dataSystem.variables`、`switches` 和 `$dataMapInfos`，按游戏原名自动生成变量/开关/回想候选并用关键词标注欲望、感度、成长、关系等类别；没有命名的变量不会被全部暴露，而是保留通用白名单回退。语义识别是候选提示，不会猜测未命名插件内部字段，也不保证不同游戏的同名变量含义相同。免费商店不做购买限额保护，仅提示按需购买；无敌开启时保存当前 HP/攻击/防御快照，关闭时按角色当前正常值恢复而不是覆盖升级后新值。作弊可能破坏事件、数值或存档，请复制存档后按需使用。
 - **存档升级契约**：应用升级必须保持同一 `applicationId` 和同一签名证书，并使用 `adb install -r` 或系统覆盖安装；不要卸载、清除数据或更换签名。WebView 的 localStorage、RPG Maker 存档和设置因此可以保留。新版本只增加兼容字段，不主动删除用户存档。
 
 翻译筛选规则：无论是否手动勾选 DeepSeek，工具只会把含非中文文本的消息块作为候选。纯中文块不会发送到 API，也不会被改写；中英混合块仍按完整对话提交以保留上下文，但原有汉字会被保护并原样恢复。检查报告会显示候选非中文块数量和跳过的中文块数量。
@@ -88,6 +90,10 @@ cd .\game2apk-tool
 ```
 
 `game2apk-ui.exe` 会隐藏启动同目录的 `game2apk-tool.exe --backend --port 0`，从后台读取一个随机 loopback 地址后打开默认浏览器。不要直接双击 `game2apk-tool.exe`；它是无 UI 后台/CLI，供前端和脚本调用。工具链路径只保存到当前用户 `%APPDATA%\\game2apk-tool\\toolchain.json`，不会写回仓库。
+
+### 更新 portable 工具
+
+portable 工具不是 Android 应用，不需要安装器或卸载。先关闭 `game2apk-ui.exe` 和后台进程，再把新版 ZIP 解压到新目录并启动其中的 `game2apk-ui.exe`；确认正常后即可删除旧的 EXE 目录。若旧目录里有 `.state`（签名状态/翻译缓存）或 `gradle-home`，先复制到新目录，不能删除；原游戏目录、手机存档和已安装的游戏 APK 不会被工具更新覆盖。Release ZIP 本身不含 APK、原游戏、SDK/JDK、缓存、存档、密钥或 API Key。
 
 浏览器前端的标准流程为：选择游戏目录 → 点击“检查项目” → 填写应用信息与可选翻译/签名密码 → 必要时保存 SDK/JDK/Gradle 路径，或点击“下载 Android 命令行工具/下载 JDK 17”并选择安装目录、确认官方 HTTPS 下载 → 点击“构建并验证”。检查通过前构建按钮不会启用；任务开始后页面每 500 ms 读取状态，并显示阶段、百分比、实时日志、结果或脱敏错误。点击“取消任务”会请求后台安全停止当前阶段。
 
@@ -144,7 +150,7 @@ $env:PYTHONPATH = (Resolve-Path .\game2apk-tool\src).Path
 python .\game2apk-tool\scripts\game2apk.py inspect ".\我的MV项目"
 python .\game2apk-tool\scripts\game2apk.py run ".\我的MV项目" `
   --template .\game2apk-tool\templates\android-rpgmv `
-  --version-code 7 --version-name 1.2.0 `
+  --version-code 8 --version-name 1.3.0 `
   --sign-password-prompt
 ```
 

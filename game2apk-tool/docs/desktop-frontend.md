@@ -19,6 +19,7 @@
 - “取消任务”只设置既有 PipelineService 的取消事件，后端继续使用原有受标记 `.work` 与安全清理约束。
 - 工具链卡片可先调用本机已安装的 SDK/JDK；缺少时，点击官方工具下载按钮、选择安装目录并确认后，后台才下载并解压，完成后自动保存路径。Command-line Tools 仍需用户用 `sdkmanager` 安装 platform/build-tools。
 - SDK/JDK/Gradle 路径只写入 `%APPDATA%\\game2apk-tool\\toolchain.json`；没有任何静默下载。Gradle 用户缓存是跨项目共用的 `GRADLE_USER_HOME`，构建完成后不会自动清理，避免下一个游戏重复下载依赖；需要释放磁盘或修复损坏缓存时请先关闭构建，再由用户手动清理。Release 不含 Android SDK/JDK、Gradle 缓存、原游戏、存档、APK、签名材料或凭据。
+- portable 更新不需要卸载：关闭 UI 与后台后，将新版 ZIP 解压到新目录并启动 `game2apk-ui.exe`。若旧目录存在 `.state`（签名状态/翻译缓存）或 `gradle-home`，先复制到新目录；这些目录不随 Release ZIP 分发，也不会被工具自动清除。工具更新不会覆盖原游戏目录、手机存档或已安装 APK。
 
 ## 本机安全边界
 
