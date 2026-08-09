@@ -151,6 +151,36 @@ class _RepairOnRetryTransport:
         }
 
 
+class _DocumentTransport:
+    def __init__(self, repair: bool = False) -> None:
+        self.calls: list[dict] = []
+        self.repair = repair
+
+    def chat(self, payload: dict, _api_key: str) -> dict:
+        self.calls.append(payload)
+        prompt = payload["messages"][-1]["content"]
+        document = prompt.split("SOURCE_DOCUMENT_BEGIN\n", 1)[1].split("SOURCE_DOCUMENT_END", 1)[0]
+        rows: list[str] = []
+        for line in document.splitlines():
+            if not line.strip():
+                continue
+            item_id, source = line.split("\t", 1)
+            if self.repair and len(self.calls) == 1:
+                translated = source
+            else:
+                latin = re.findall(r"[A-Za-z]+", source)
+                translated = "中文标签" + ((" " + " ".join(latin)) if latin else "")
+            rows.append(f"{item_id}\t{translated}")
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"content": "\n".join(rows)},
+                }
+            ]
+        }
+
+
 class TranslationSpeedTests(unittest.TestCase):
     def _www(self, root: Path) -> Path:
         www = root / "www"
@@ -304,6 +334,62 @@ class TranslationSpeedTests(unittest.TestCase):
             # reports a truncated response.
             self.assertLessEqual(transport.max_items, 24)
 
+    def test_large_cheat_scope_uses_text_document_and_writes_result(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            www = self._www(root)
+            labels = ["", *[f"条件の日本語{i}" for i in range(1, 101)]]
+            (www / "data" / "System.json").write_text(
+                json.dumps({"gameTitle": "Demo", "locale": "ja_JP", "terms": {}, "variables": labels, "switches": [""]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            transport = _DocumentTransport()
+            report = TranslationService().translate(
+                www,
+                api_key="not-a-real-key",
+                transport=transport,
+                memory_path=root / "memory.json",
+                confirmed_third_party=True,
+                force=True,
+                entry_kinds={"system-variable", "system-switch"},
+                batch_size=100,
+                max_concurrency=4,
+            )
+            self.assertEqual(report.entries_total, 100)
+            self.assertEqual(report.entries_applied, 100)
+            self.assertEqual(report.api_requests, 1)
+            self.assertEqual(len(transport.calls), 1)
+            self.assertTrue(report.document_source_path)
+            self.assertTrue(report.document_result_path)
+            self.assertEqual(len(Path(report.document_source_path).read_text(encoding="utf-8").splitlines()), 100)
+            self.assertEqual(len(Path(report.document_result_path).read_text(encoding="utf-8").splitlines()), 100)
+
+    def test_document_repair_groups_kana_failures_into_one_retry(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            www = self._www(root)
+            labels = ["", *[f"条件の日本語{i}" for i in range(1, 101)]]
+            (www / "data" / "System.json").write_text(
+                json.dumps({"gameTitle": "Demo", "locale": "ja_JP", "terms": {}, "variables": labels, "switches": [""]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            transport = _DocumentTransport(repair=True)
+            report = TranslationService().translate(
+                www,
+                api_key="not-a-real-key",
+                transport=transport,
+                memory_path=root / "memory.json",
+                confirmed_third_party=True,
+                force=True,
+                entry_kinds={"system-variable", "system-switch"},
+                batch_size=100,
+                max_concurrency=4,
+            )
+            self.assertEqual(report.entries_applied, 100)
+            self.assertFalse(report.failures)
+            self.assertEqual(report.api_requests, 2)
+            self.assertEqual(len(transport.calls), 2)
+
     def test_invalid_thinking_labels_get_singleton_non_thinking_repair(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -449,6 +535,8 @@ class TranslationSpeedTests(unittest.TestCase):
         self.assertTrue(validate_simplified_chinese_label("Gallery unlocked", "Gallery unlocked")[0])
         self.assertTrue(validate_simplified_chinese_label("MAP:\u5f8c\u308d", "MAP:\u540e\u65b9")[0])
         self.assertFalse(validate_simplified_chinese_label("MAP:\u5f8c\u308d", "\u5730\u56fe:\u540e\u65b9")[0])
+        self.assertTrue(validate_simplified_chinese_label("主人公の左", "主人公の左侧")[0])
+        self.assertFalse(validate_simplified_chinese_label("主人公の左", "主人公ち左")[0])
         self.assertFalse(validate_simplified_chinese_label("犯され中", "犯され中")[0])
 
     def test_cheat_scope_matches_runtime_limits_and_japanese_signals(self) -> None:

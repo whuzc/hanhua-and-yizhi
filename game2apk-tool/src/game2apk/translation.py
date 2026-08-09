@@ -47,7 +47,31 @@ MAX_TRANSLATION_CONCURRENCY = 8
 # duplicate labels to be reused from the memory cache.
 CHEAT_LABEL_MAX_BATCH_SIZE = 24
 CHEAT_LABEL_MAX_CONCURRENCY = 2
+# A single line-oriented text document is more compact than repeating JSON
+# envelopes for every label.  Use it for the real runtime-sized cheat menu;
+# small synthetic/repair batches keep the existing JSON path.
+CHEAT_LABEL_DOCUMENT_MIN_ENTRIES = 96
+CHEAT_LABEL_DOCUMENT_PROMPT_VERSION = "mv-safe-v4-cheat-label-document-preserve-latin"
+# Translation is allowed to finish with a small number of failed blocks.  The
+# pipeline evaluates this independently for the body-text group and the
+# dynamic cheat-label group; a ratio strictly greater than this value blocks
+# artifact generation.  Exactly 2% is intentionally tolerated.
+TRANSLATION_FAILURE_THRESHOLD = 0.02
 _TRANSIENT_HTTP_STATUSES = {408, 425, 429, 500, 502, 503, 504}
+
+
+def translation_failure_count(report: TranslationReport) -> int:
+    """Return the conservative number of blocks that did not get applied."""
+
+    return max(0, len(report.failures), report.entries_total - report.entries_applied)
+
+
+def translation_failure_ratio(report: TranslationReport) -> float:
+    """Return the failed-block ratio for one translation group."""
+
+    if report.entries_total <= 0:
+        return 0.0
+    return translation_failure_count(report) / float(report.entries_total)
 
 
 def _retry_delay(attempt: int, retry_after: float | None = None) -> float:
@@ -99,6 +123,7 @@ _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _HAN_RUN_RE = re.compile(r"[\u3400-\u9fff]+")
 _HIRAGANA_RE = re.compile(r"[\u3040-\u309f]")
 _KATAKANA_RE = re.compile(r"[\u30a0-\u30ff\u31f0-\u31ff]")
+_KANA_RUN_RE = re.compile(r"[\u3040-\u309f\u30a0-\u30ff\u31f0-\u31ff]+")
 _LATIN_TOKEN_RE = re.compile(r"[A-Za-z]+")
 # Common RPG/plugin abbreviations are documented for prompt context. Cheat
 # labels preserve all Latin/English text by user choice; Japanese is the only
@@ -113,6 +138,12 @@ CHEAT_LABEL_KINDS = frozenset({"system-variable", "system-switch", "cheat-field"
 # and makes the build contract match the actual menu.
 CHEAT_VISIBLE_VARIABLE_LIMIT = 256
 CHEAT_VISIBLE_SWITCH_LIMIT = 128
+_ALLOWED_KANA_PARTICLES = frozenset(
+    {
+        "の", "は", "が", "を", "に", "へ", "で", "と", "も", "や", "ね", "よ", "ぞ", "さ", "な", "か",
+        "ねえ", "よね", "かな", "かも", "まあ", "うん", "あ", "え", "お",
+    }
+)
 _TEXT_KEYS = {
     "name",
     "description",
@@ -463,6 +494,10 @@ def _cheat_label_latin_tokens(text: str) -> list[str]:
     return _LATIN_TOKEN_RE.findall(protected)
 
 
+def _untranslated_kana_runs(text: str) -> list[str]:
+    return [run for run in _KANA_RUN_RE.findall(text) if run not in _ALLOWED_KANA_PARTICLES]
+
+
 def cheat_label_needs_translation(text: str) -> bool:
     """Whether a dynamic cheat label contains Japanese text.
 
@@ -523,13 +558,21 @@ def _is_simplified_chinese_target(target_language: str) -> bool:
 def validate_simplified_chinese_label(original: str, translated: str) -> tuple[bool, str]:
     """Validate the strict output contract for a cheat-menu label.
 
-    Japanese kana is never accepted in the result. Latin/English is allowed
-    and is requested to remain unchanged; a Japanese candidate must contain at
-    least one Han character after translation.
+    Longer Japanese words and kana runs are never accepted in the result.
+    Standalone grammatical/intonation particles may remain when the result has
+    Chinese context; Latin/English is allowed and is requested to remain
+    unchanged.
     """
 
-    if _HIRAGANA_RE.search(translated) or _KATAKANA_RE.search(translated):
-        return False, "cheat label still contains Japanese kana"
+    invalid_kana = _untranslated_kana_runs(translated)
+    if invalid_kana:
+        return False, f"cheat label still contains untranslated Japanese kana: {invalid_kana!r}"
+    original_particles = [run for run in _KANA_RUN_RE.findall(original) if run in _ALLOWED_KANA_PARTICLES]
+    translated_particles = [run for run in _KANA_RUN_RE.findall(translated) if run in _ALLOWED_KANA_PARTICLES]
+    if any(translated_particles.count(run) > original_particles.count(run) for run in set(translated_particles)):
+        return False, "cheat label contains an unexpected Japanese particle"
+    if translated_particles and not _CJK_RE.search(translated):
+        return False, "cheat label particle has no Chinese context"
     # English/Latin is deliberately not translated. Keep its original token
     # sequence (including case) stable even when Japanese text surrounds it,
     # so a provider cannot silently turn MAP/pict/SE/EXP into another word.
@@ -633,6 +676,21 @@ class TranslationTransport(Protocol):
     def list_models(self, api_key: str) -> list[str]: ...
 
     def chat(self, payload: dict[str, Any], api_key: str) -> dict[str, Any]: ...
+
+
+class _CountingTransport:
+    """Count provider calls without changing the injected transport object."""
+
+    def __init__(self, base: TranslationTransport):
+        self.base = base
+        self.requests = 0
+
+    def list_models(self, api_key: str) -> list[str]:
+        return self.base.list_models(api_key)
+
+    def chat(self, payload: dict[str, Any], api_key: str) -> dict[str, Any]:
+        self.requests += 1
+        return self.base.chat(payload, api_key)
 
 
 class DeepSeekHTTPError(TranslationError):
@@ -917,7 +975,8 @@ def _request_batch(
             "This is a mandatory Japanese-label normalization pass, not a word lookup: translate Japanese Kanji, "
             "hiragana, and katakana into natural Simplified Chinese. English/Latin text is understandable to the "
             "user and MUST be preserved rather than translated; this includes plugin identifiers, MAP/pict names, "
-            "stat codes, and ordinary English labels. Do not leave Japanese kana in the result. Preserve numbers, "
+            "stat codes, and ordinary English labels. Do not leave longer Japanese words or kana runs; a standalone "
+            "particle such as の/は/が may remain only when the result already has Chinese context. Preserve numbers, "
             "MV control markers, and the requested segments array. Return JSON exactly as {\"translations\":[{\"id\":string,\"segments\":string[]}]}. "
             "Read all segments of one item together, keep the segments array length/order and line boundaries, "
             "and do not translate markers, code, paths, or tags.\n"
@@ -974,6 +1033,202 @@ def _request_batch(
     raise TranslationError(str(last_error or "translation request failed"))
 
 
+def _document_text(entries: list[TranslationEntry]) -> str:
+    """Serialize one-label-per-line text for the strict cheat pass."""
+
+    rows: list[str] = []
+    for entry in entries:
+        if len(entry.segments) != 1:
+            raise TranslationError("cheat-label document mode requires one segment per label")
+        # System.json labels are normally one line. Escaping the three TSV
+        # delimiters also keeps a malformed plugin label from shifting IDs.
+        value = (
+            entry.segments[0]
+            .replace("\\", "\\\\")
+            .replace("\t", "\\t")
+            .replace("\r", "\\r")
+            .replace("\n", "\\n")
+        )
+        rows.append(f"{entry.entry_id}\t{value}")
+    return "\n".join(rows) + ("\n" if rows else "")
+
+
+def _write_translation_document(path: Path | None, content: str) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8", newline="\n")
+
+
+def _parse_translation_document(content: str, expected_ids: set[str]) -> dict[str, list[str]]:
+    """Parse the provider's ID<TAB>translation text without trusting prose."""
+
+    result: dict[str, list[str]] = {}
+    for raw_line in content.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw_line.strip()
+        if not line or line.startswith("```") or line.startswith("#"):
+            continue
+        if "\t" in line:
+            item_id, translated = line.split("\t", 1)
+        else:
+            match = re.match(r"^([0-9a-f]{24})\s+(.+)$", line, flags=re.IGNORECASE)
+            if match is None:
+                # Models sometimes add one introductory sentence. It is safe
+                # to ignore prose as long as every expected ID is present.
+                continue
+            item_id, translated = match.groups()
+        item_id = item_id.strip()
+        if item_id not in expected_ids:
+            raise TranslationError("translation document contains an unexpected ID")
+        if item_id in result:
+            raise TranslationError("translation document contains a duplicate ID")
+        translated = translated.strip()
+        if not translated:
+            raise TranslationError("translation document contains an empty result")
+        translated = (
+            translated
+            .replace("\\t", "\t")
+            .replace("\\r", "\r")
+            .replace("\\n", "\n")
+            .replace("\\\\", "\\")
+        )
+        result[item_id] = [translated]
+    if set(result) != expected_ids:
+        missing = sorted(expected_ids.difference(result))[:3]
+        raise TranslationError(f"translation document IDs do not match; missing {missing!r}")
+    return result
+
+
+def _request_document(
+    transport: TranslationTransport,
+    api_key: str,
+    model: str,
+    target_language: str,
+    entries: list[TranslationEntry],
+    thinking_enabled: bool,
+    reasoning_effort: str,
+    cancel_event=None,
+    source_path: Path | None = None,
+    result_path: Path | None = None,
+) -> dict[str, list[str]]:
+    document = _document_text(entries)
+    _write_translation_document(source_path, document)
+    prompt = (
+        "Translate this RPG Maker MV cheat-label document as a coherent set for a Simplified Chinese (zh-CN) UI. "
+        "Translate Japanese Kanji, hiragana, and katakana into natural Simplified Chinese. "
+        "English/Latin text MUST remain exactly unchanged, including case and spelling; this includes MAP, pict, "
+        "SE, EXP, HP, MP, ATK, DEF, GP, FP and ordinary English labels. Do not leave longer Japanese words or kana "
+        "runs; a standalone particle such as の/は/が may remain only with Chinese context. "
+        "The input and output are TSV documents: each line is ID<TAB>TEXT. Return exactly one line for every ID, "
+        "with the same ID and the translated TEXT after one tab. Do not add numbering, explanations, Markdown, or JSON. "
+        "Keep IDs, numbers, MV control markers, paths, and tags unchanged. Keep each label on one output line; "
+        "encode any line break as the two characters \\n.\n"
+        f"TARGET_LANGUAGE={target_language}\nSOURCE_DOCUMENT_BEGIN\n{document}SOURCE_DOCUMENT_END"
+    )
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a constrained game-label translation engine."},
+            {"role": "user", "content": prompt},
+        ],
+        "thinking": {"type": "enabled" if thinking_enabled else "disabled"},
+        "temperature": 0.1,
+        "stream": False,
+    }
+    if thinking_enabled:
+        payload["reasoning_effort"] = reasoning_effort
+    estimated_chars = sum(len(segment) for entry in entries for segment in entry.segments)
+    payload["max_tokens"] = min(32768, max(8192, estimated_chars * 5 + 1024))
+    if cancel_event is not None and cancel_event.is_set():
+        raise CancelledError("translation cancelled")
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            data = transport.chat(payload, api_key)
+            content, _ = _content_from_response(data)
+            _write_translation_document(result_path, content)
+            return _parse_translation_document(content, {entry.entry_id for entry in entries})
+        except DeepSeekHTTPError as exc:
+            last_error = exc
+            if exc.status not in _TRANSIENT_HTTP_STATUSES or attempt == 2:
+                raise
+            _wait_for_retry(cancel_event, _retry_delay(attempt, exc.retry_after))
+        except TranslationError as exc:
+            last_error = exc
+            raise
+    raise TranslationError(str(last_error or "translation document request failed"))
+
+
+def _request_document_with_recovery(
+    transport: TranslationTransport,
+    api_key: str,
+    model: str,
+    target_language: str,
+    entries: list[TranslationEntry],
+    thinking_enabled: bool,
+    reasoning_effort: str,
+    cancel_event=None,
+    source_path: Path | None = None,
+    result_path: Path | None = None,
+) -> dict[str, list[str]]:
+    """Request one text document, retrying without thinking then splitting."""
+
+    try:
+        return _request_document(
+            transport,
+            api_key,
+            model,
+            target_language,
+            entries,
+            thinking_enabled,
+            reasoning_effort,
+            cancel_event,
+            source_path,
+            result_path,
+        )
+    except (DeepSeekHTTPError, TranslationError) as exc:
+        if thinking_enabled and _is_length_response_error(exc):
+            try:
+                return _request_document(
+                    transport,
+                    api_key,
+                    model,
+                    target_language,
+                    entries,
+                    False,
+                    reasoning_effort,
+                    cancel_event,
+                    source_path,
+                    result_path,
+                )
+            except (DeepSeekHTTPError, TranslationError) as fallback_error:
+                exc = fallback_error
+        if len(entries) <= 1 or not _is_batch_shape_error(exc):
+            raise
+        midpoint = max(1, len(entries) // 2)
+        first = _request_document_with_recovery(
+            transport,
+            api_key,
+            model,
+            target_language,
+            entries[:midpoint],
+            thinking_enabled,
+            reasoning_effort,
+            cancel_event,
+        )
+        second = _request_document_with_recovery(
+            transport,
+            api_key,
+            model,
+            target_language,
+            entries[midpoint:],
+            thinking_enabled,
+            reasoning_effort,
+            cancel_event,
+        )
+        return {**first, **second}
+
+
 def _is_batch_shape_error(error: Exception) -> bool:
     """Whether a provider response should be retried as smaller batches.
 
@@ -1018,6 +1273,8 @@ def _request_batch_with_recovery(
     reasoning_effort: str,
     cancel_event=None,
     strict_simplified_chinese: bool = False,
+    document_source_path: Path | None = None,
+    document_result_path: Path | None = None,
 ) -> dict[str, list[str]]:
     """Request a batch and halve it when the provider cannot serialize it.
 
@@ -1027,6 +1284,19 @@ def _request_batch_with_recovery(
     apply a partial response under the original batch's identity.
     """
 
+    if strict_simplified_chinese and len(entries) >= CHEAT_LABEL_DOCUMENT_MIN_ENTRIES:
+        return _request_document_with_recovery(
+            transport,
+            api_key,
+            model,
+            target_language,
+            entries,
+            thinking_enabled,
+            reasoning_effort,
+            cancel_event,
+            document_source_path,
+            document_result_path,
+        )
     try:
         return _request_batch(
             transport,
@@ -1187,7 +1457,7 @@ class TranslationService:
         # so the caller's explicit cheat-label scope must bypass the general
         # Han-ratio heuristic entirely.  Every non-empty variable/switch label
         # is sent through the strict zh-CN contract; already-Chinese and
-         # English labels are accepted unchanged, while Japanese labels must
+        # English labels are accepted unchanged, while Japanese labels must
          # return Chinese without kana.
         entries = (
             filter_cheat_label_entries(source_entries)
@@ -1236,6 +1506,8 @@ class TranslationService:
         if not confirmed_third_party:
             raise BlockedError("translation requires explicit confirmation before sending selected text to DeepSeek")
         transport = transport or DeepSeekTransport()
+        counted_transport = _CountingTransport(transport)
+        transport = counted_transport
         if api_key is None:
             api_key = os.environ.get("DEEPSEEK_API_KEY")
         if api_key is None:
@@ -1246,6 +1518,14 @@ class TranslationService:
         model = model or DEFAULT_TRANSLATION_MODEL
         report.model = model
         memory = TranslationMemory(memory_path or (Path(www).parent / ".state" / "translation-memory.json"))
+        document_source_path: Path | None = None
+        document_result_path: Path | None = None
+        if strict_simplified_chinese:
+            document_source_path = memory.path.parent / "cheat-labels-source.txt"
+            document_result_path = memory.path.parent / "cheat-labels-result.txt"
+            report.document_source_path = str(document_source_path)
+            report.document_result_path = str(document_result_path)
+            _write_translation_document(document_source_path, _document_text(entries))
         memory_prompt_version = CHEAT_LABEL_PROMPT_VERSION if strict_simplified_chinese else PROMPT_VERSION
         translations: dict[str, list[str]] = {}
         # Group identical source blocks before making requests.  RPG Maker
@@ -1283,7 +1563,13 @@ class TranslationService:
                 f"translation queued: {len(pending)} unique blocks ({duplicate_count} duplicates reused)",
             )
 
-        batches = [pending[offset : offset + batch_size] for offset in range(0, len(pending), batch_size)]
+        if strict_simplified_chinese and len(pending) >= CHEAT_LABEL_DOCUMENT_MIN_ENTRIES:
+            # One compact TSV document keeps all labels in one context window;
+            # _request_document_with_recovery splits only if the provider says
+            # the document is too large or returns incomplete IDs.
+            batches = [pending]
+        else:
+            batches = [pending[offset : offset + batch_size] for offset in range(0, len(pending), batch_size)]
         executor: ThreadPoolExecutor | None = None
         futures: list[Any] = []
         cancelled = False
@@ -1306,6 +1592,8 @@ class TranslationService:
                         reasoning_effort,
                         self.cancel_event,
                         strict_simplified_chinese,
+                        document_source_path if strict_simplified_chinese and len(pending) >= CHEAT_LABEL_DOCUMENT_MIN_ENTRIES else None,
+                        document_result_path if strict_simplified_chinese and len(pending) >= CHEAT_LABEL_DOCUMENT_MIN_ENTRIES else None,
                     )
                     for batch in batches
                 ]
@@ -1377,11 +1665,57 @@ class TranslationService:
                             break
                     if batch_translations is None:
                         continue
+                    document_batch = bool(
+                        strict_simplified_chinese
+                        and len(batch) >= CHEAT_LABEL_DOCUMENT_MIN_ENTRIES
+                    )
+                    document_repair_reasons: dict[str, str] = {}
+                    if document_batch and thinking_enabled:
+                        # Repair all invalid labels as one second text
+                        # document. This avoids turning a 15-label model
+                        # hiccup into 15 singleton API requests.
+                        repair_entries: list[TranslationEntry] = []
+                        for _key, group in batch:
+                            candidate_entry = group[0]
+                            _restored, candidate_reason = validate_candidate(
+                                candidate_entry,
+                                batch_translations.get(candidate_entry.entry_id),
+                            )
+                            if candidate_reason:
+                                repair_entries.append(candidate_entry)
+                        if repair_entries:
+                            try:
+                                repair_result = _request_document_with_recovery(
+                                    transport,
+                                    api_key,
+                                    model,
+                                    target_language,
+                                    repair_entries,
+                                    False,
+                                    reasoning_effort,
+                                    self.cancel_event,
+                                )
+                                batch_translations.update(repair_result)
+                                for repair_entry in repair_entries:
+                                    _repair_value, repair_reason = validate_candidate(
+                                        repair_entry,
+                                        batch_translations.get(repair_entry.entry_id),
+                                    )
+                                    if repair_reason:
+                                        document_repair_reasons[repair_entry.entry_id] = repair_reason
+                            except Exception as repair_error:
+                                safe_repair_error = redact_text(str(repair_error), (api_key,))
+                                for repair_entry in repair_entries:
+                                    document_repair_reasons[repair_entry.entry_id] = safe_repair_error
                     try:
                         for key, group in batch:
                             entry = group[0]
                             restored, invalid_reason = validate_candidate(entry, batch_translations.get(entry.entry_id))
-                            if invalid_reason and strict_simplified_chinese and thinking_enabled:
+                            if invalid_reason and document_batch:
+                                retry_reason = document_repair_reasons.get(entry.entry_id)
+                                if retry_reason:
+                                    invalid_reason = f"{invalid_reason}; document retry: {retry_reason}"
+                            if invalid_reason and strict_simplified_chinese and thinking_enabled and not document_batch:
                                 # A model may preserve Japanese kana in a
                                 # large thinking response even though the
                                 # request is otherwise valid. Give the single
@@ -1450,10 +1784,26 @@ class TranslationService:
 
         if self.cancel_event is not None and self.cancel_event.is_set():
             raise CancelledError("translation cancelled")
+        if strict_simplified_chinese and document_result_path is not None:
+            result_rows: list[str] = []
+            for entry in entries:
+                candidate = translations.get(entry.entry_id)
+                value = candidate[0] if candidate and len(candidate) == 1 else entry.source_text
+                escaped = (
+                    value.replace("\\", "\\\\")
+                    .replace("\t", "\\t")
+                    .replace("\r", "\\r")
+                    .replace("\n", "\\n")
+                )
+                result_rows.append(f"{entry.entry_id}\t{escaped}")
+            _write_translation_document(document_result_path, "\n".join(result_rows) + ("\n" if result_rows else ""))
         apply_failures = apply_translations(www, entries, translations)
         report.failures.extend(apply_failures)
         report.entries_applied = len(translations) - len(apply_failures)
-        report.live_api_used = isinstance(transport, DeepSeekTransport) and bool(pending)
+        report.failure_count = translation_failure_count(report)
+        report.failure_ratio = translation_failure_ratio(report)
+        report.api_requests = counted_transport.requests
+        report.live_api_used = isinstance(counted_transport.base, DeepSeekTransport) and bool(pending)
         failed_ids = {failure.entry_id for failure in apply_failures}
         report.modified_files = sorted(
             {

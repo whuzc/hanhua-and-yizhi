@@ -14,7 +14,7 @@ from game2apk.builder import ALIYUN_GRADLE_DISTRIBUTION, OFFICIAL_GRADLE_DISTRIB
 from game2apk.config import build_config, default_control_config, load_android_config
 from game2apk.errors import BlockedError, ConfigurationError
 from game2apk.inspector import inspect_game
-from game2apk.models import BuildConfig, ToolchainInfo
+from game2apk.models import BuildConfig, ToolchainInfo, TranslationFailure, TranslationReport
 from game2apk.patcher import patch_staged_www
 from game2apk.pipeline import PipelineService
 from game2apk.security import create_work_marker, redact_text, safe_remove_workdir
@@ -421,6 +421,91 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("data/Map001.json", translation.modified_files)
         manifest = json.loads(Path(stage.manifest_path).read_text(encoding="utf-8"))
         self.assertIn("data/Map001.json", manifest["allowedModifiedFiles"])
+
+    def test_body_translation_at_or_below_two_percent_continues_with_warning(self) -> None:
+        from types import SimpleNamespace
+
+        report = TranslationReport(
+            schema_version=1,
+            source_language="ja",
+            target_language="zh-CN",
+            model="deepseek-v4-flash",
+            entries_total=50,
+            entries_applied=49,
+            entries_cached=0,
+            failures=[TranslationFailure("body-49", "synthetic untranslated block", "原文")],
+            report_path=str(self.root / "body-report.json"),
+        )
+        progress: list[tuple[str, float, str]] = []
+        progress_sink = lambda stage_name, fraction, message: progress.append((stage_name, fraction, message))
+        with mock.patch("game2apk.pipeline.TranslationService") as service_cls:
+            service_cls.return_value.translate.return_value = report
+            result = PipelineService(self.root, progress=progress_sink).translate(
+                SimpleNamespace(staged_www=str(self.www), manifest_path=None),
+                api_key="not-a-real-key",
+            )
+        self.assertIs(result, report)
+        self.assertTrue(report.continued_with_failures)
+        self.assertEqual(report.failure_count, 1)
+        self.assertAlmostEqual(report.failure_ratio, 0.02)
+        self.assertTrue(any("正文" in message and "保留原文" in message for _stage, _fraction, message in progress))
+        persisted = json.loads((self.root / "body-report.json").read_text(encoding="utf-8"))
+        self.assertTrue(persisted["continuedWithFailures"])
+        self.assertEqual(persisted["failureCount"], 1)
+
+    def test_body_translation_over_two_percent_stops_before_build(self) -> None:
+        from types import SimpleNamespace
+
+        report = TranslationReport(
+            schema_version=1,
+            source_language="ja",
+            target_language="zh-CN",
+            model="deepseek-v4-flash",
+            entries_total=50,
+            entries_applied=48,
+            entries_cached=0,
+            failures=[
+                TranslationFailure("body-48", "first synthetic failure", "原文1"),
+                TranslationFailure("body-49", "second synthetic failure", "原文2"),
+            ],
+            report_path=str(self.root / "body-report-blocked.json"),
+        )
+        with mock.patch("game2apk.pipeline.TranslationService") as service_cls:
+            service_cls.return_value.translate.return_value = report
+            with self.assertRaises(BlockedError) as raised:
+                PipelineService(self.root).translate(
+                    SimpleNamespace(staged_www=str(self.www), manifest_path=None),
+                    api_key="not-a-real-key",
+                )
+        self.assertIn("正文", str(raised.exception))
+        self.assertIn("exceeding the 2% threshold", str(raised.exception))
+        self.assertAlmostEqual(report.failure_ratio, 0.04)
+
+    def test_cheat_label_group_uses_the_same_independent_two_percent_policy(self) -> None:
+        from types import SimpleNamespace
+
+        report = TranslationReport(
+            schema_version=1,
+            source_language="ja",
+            target_language="zh-CN",
+            model="deepseek-v4-flash",
+            entries_total=50,
+            entries_applied=49,
+            entries_cached=0,
+            failures=[TranslationFailure("label-49", "synthetic label failure", "ラベル")],
+            report_path=str(self.root / "label-report.json"),
+        )
+        progress: list[tuple[str, float, str]] = []
+        progress_sink = lambda stage_name, fraction, message: progress.append((stage_name, fraction, message))
+        with mock.patch("game2apk.pipeline.TranslationService") as service_cls:
+            service_cls.return_value.translate.return_value = report
+            result = PipelineService(self.root, progress=progress_sink).translate_cheat_labels(
+                SimpleNamespace(staged_www=str(self.www), manifest_path=None),
+                api_key="not-a-real-key",
+            )
+        self.assertIs(result, report)
+        self.assertTrue(report.continued_with_failures)
+        self.assertTrue(any("作弊标签" in message and "保留原文" in message for _stage, _fraction, message in progress))
 
     def test_bad_translation_is_not_applied(self) -> None:
         entries = extract_safe_entries(self.www)

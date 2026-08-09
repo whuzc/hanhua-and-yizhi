@@ -225,6 +225,18 @@ class TranslationReport:
     source_entries_total: int | None = None
     entries_skipped_chinese: int = 0
     entries_skipped_non_text: int = 0
+    # Strict cheat-label document mode writes a local source/result text file
+    # and records how many provider calls were actually made.  These paths
+    # never contain API credentials; they are only local translation artifacts.
+    api_requests: int = 0
+    document_source_path: str | None = None
+    document_result_path: str | None = None
+    # Failure accounting is kept on the report so the UI and the saved JSON
+    # can distinguish a tolerated partial translation from a clean pass.
+    # The pipeline applies the 2% stop/continue policy per translation group.
+    failure_count: int = 0
+    failure_ratio: float = 0.0
+    continued_with_failures: bool = False
     # Relative files that were successfully changed in the staged project.
     # The verifier uses this narrow, report-backed allowlist for translation
     # edits instead of treating every staged file as mutable.
@@ -249,6 +261,12 @@ class TranslationReport:
             "sourceEntriesTotal": self.source_entries_total if self.source_entries_total is not None else self.entries_total,
             "entriesSkippedChinese": self.entries_skipped_chinese,
             "entriesSkippedNonText": self.entries_skipped_non_text,
+            "apiRequests": self.api_requests,
+            "documentSourcePath": self.document_source_path,
+            "documentResultPath": self.document_result_path,
+            "failureCount": self.failure_count,
+            "failureRatio": self.failure_ratio,
+            "continuedWithFailures": self.continued_with_failures,
             "modifiedFiles": list(self.modified_files),
         }
 
