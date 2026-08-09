@@ -105,6 +105,11 @@
       translationToggle.checked = false;
       translationConfirm.checked = false;
       translationOptions.hidden = true;
+    } else {
+      // The options contain the mandatory cheat-label translation key and
+      // confirmation, so they remain visible even when full game-text
+      // translation is left unchecked.
+      translationOptions.hidden = false;
     }
   };
 
@@ -120,6 +125,9 @@
     const candidateText = Number.isFinite(candidateCount)
       ? `\u5c06\u4ec5\u7ffb\u8bd1 ${candidateCount} \u4e2a\u975e\u4e2d\u6587\u5757`
       : "\u5c06\u4ec5\u7ffb\u8bd1\u975e\u4e2d\u6587\u6587\u672c";
+    const cheatText = profile?.cheatLabelsNeedTranslation
+      ? "高级作弊标签会单独翻译"
+      : "高级作弊标签已是中文或无需翻译";
     setText(
       translationDetection.querySelector("strong"),
       detected ? (likelyChinese ? `\u68c0\u6d4b\u5230\u5df2\u6709\u4e2d\u6587\uff08${ratioText}\uff09` : `\u672a\u68c0\u6d4b\u5230\u660e\u663e\u4e2d\u6587\uff08${ratioText}\uff09`) : "\u9879\u76ee\u8bed\u8a00\u6682\u65f6\u65e0\u6cd5\u5224\u65ad",
@@ -127,8 +135,8 @@
     setText(
       translationDetection.querySelector("small"),
       detected && likelyChinese
-        ? `\u9ed8\u8ba4\u4e0d\u7ffb\u8bd1；${candidateText}；\u4e2d\u6587\u5757\u4f1a\u4fdd\u6301\u539f\u6587。`
-        : `\u7ffb\u8bd1\u662f\u53ef\u9009\u529f\u80fd，${candidateText}；\u4e2d\u6587\u5757\u4f1a\u4fdd\u6301\u539f\u6587。`,
+        ? `\u9ed8\u8ba4\u4e0d\u7ffb\u8bd1；${candidateText}；${cheatText}；\u4e2d\u6587\u5757\u4f1a\u4fdd\u6301\u539f\u6587。`
+        : `\u7ffb\u8bd1\u662f\u53ef\u9009\u529f\u80fd，${candidateText}；${cheatText}；\u4e2d\u6587\u5757\u4f1a\u4fdd\u6301\u539f\u6587。`,
     );
     resetTranslationChoice(true);
   };
@@ -450,7 +458,7 @@
     const source = $("#source-path").value.trim();
     const translate = $("#translate-toggle").checked;
     const confirm = $("#translation-confirm").checked;
-    if (translate && !confirm) { log("需要翻译确认", "启用 DeepSeek 前必须确认会向第三方发送待翻译文本。", "warn"); return; }
+    if (!confirm) { log("需要翻译确认", translate ? "启用正文翻译前必须确认会向第三方发送待翻译文本。" : "高级作弊标签始终需要翻译；请确认允许在需要时向 DeepSeek 发送变量/开关名称。", "warn"); return; }
     const versionCode = Number.parseInt($("#version-code").value, 10);
     if (!Number.isSafeInteger(versionCode) || versionCode < 1) { log("版本号无效", "Version code 必须是大于 0 的整数。", "warn"); return; }
     const payload = {
@@ -517,7 +525,7 @@
       resetTranslationChoice(false);
       if (!currentJobId) buildButton.disabled = true;
     });
-    translationToggle.addEventListener("change", (event) => { translationOptions.hidden = !event.target.checked; });
+    translationToggle.addEventListener("change", () => { translationOptions.hidden = false; });
     const updateThinkingControls = () => {
       const enabled = thinkingMode.value === "enabled";
       reasoningEffort.disabled = !enabled;

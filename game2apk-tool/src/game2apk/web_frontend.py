@@ -92,11 +92,21 @@ def _translation_profile_for_report(report: Any, progress: Callable[[str, float,
             "nonChineseEntries": 0,
             "chineseOnlyEntries": 0,
             "nonTextEntries": 0,
+            "cheatLabelEntries": 0,
+            "cheatLabelsNeedTranslation": False,
         }
     if progress is not None:
         progress("inspect", 0.88, "analyzing source language; no text is sent")
     try:
-        entries = extract_safe_entries(www_root)
+        all_entries = extract_safe_entries(www_root)
+        cheat_entries = [
+            entry for entry in all_entries if entry.kind in {"system-variable", "system-switch"}
+        ]
+        # Keep developer-facing cheat labels out of the game's language
+        # recommendation.  A Chinese game can contain Japanese editor labels;
+        # those labels are handled by the mandatory small translation pass and
+        # must not make the whole game appear untranslated.
+        entries = [entry for entry in all_entries if entry not in cheat_entries]
         profile = translation_language_profile(entries)
         candidate_entries = filter_non_chinese_entries(entries)
         candidate_ids = {entry.entry_id for entry in candidate_entries}
@@ -108,6 +118,8 @@ def _translation_profile_for_report(report: Any, progress: Callable[[str, float,
             and any("\u3400" <= char <= "\u9fff" for segment in entry.segments for char in segment)
         )
         profile["nonTextEntries"] = max(0, len(entries) - len(candidate_entries) - profile["chineseOnlyEntries"])
+        profile["cheatLabelEntries"] = len(cheat_entries)
+        profile["cheatLabelsNeedTranslation"] = bool(filter_non_chinese_entries(cheat_entries))
     except (OSError, ValueError, TypeError):
         return {"status": "unavailable", "defaultTranslate": False}
     profile["status"] = "detected"
@@ -470,6 +482,31 @@ class JobManager:
                 elif resumed:
                     partial["translation"] = {"resumed": True, "message": "prepared translation checkpoint reused"}
                     job.update_progress("stage", 1.0, "resuming prepared checkpoint; skipping stage, patch and translation")
+                # Cheat labels are mandatory even when the game's main
+                # dialogue translation remains disabled.  Only the small
+                # System.json variable/switch label set is sent.  This check
+                # also repairs an older prepared checkpoint that predates the
+                # mandatory label pass.
+                cheat_translation = None
+                needs_cheat_labels = getattr(service, "cheat_labels_need_translation", None)
+                translate_cheat_labels = getattr(service, "translate_cheat_labels", None)
+                if callable(needs_cheat_labels) and needs_cheat_labels(stage):
+                    if not request.confirm:
+                        raise ConfigurationError(
+                            "cheat-menu labels require explicit third-party confirmation before sending them to DeepSeek"
+                        )
+                    if not callable(translate_cheat_labels):
+                        raise Game2ApkError("the active pipeline does not support mandatory cheat-label translation")
+                    cheat_translation = translate_cheat_labels(
+                        stage,
+                        api_key=request.api_key,
+                        confirmed_third_party=True,
+                        thinking_enabled=request.thinking_enabled,
+                        reasoning_effort=request.reasoning_effort,
+                    )
+                    if job.cancel_event.is_set():
+                        raise CancelledError("build cancelled")
+                    partial["cheatTranslation"] = _json_safe(cheat_translation)
                 if not resumed:
                     mark_prepared = getattr(service, "mark_prepared", None)
                     if callable(mark_prepared):

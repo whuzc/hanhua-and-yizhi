@@ -314,6 +314,7 @@ def main(argv: list[str] | None = None) -> int:
             if not resumed:
                 service.patch(stage, config)
             translation = None
+            cheat_translation = None
             api_key = None
             if translate_requested and not resumed:
                 api_key = _read_cli_secret(args, "api_key", "DeepSeek API key", default_env="DEEPSEEK_API_KEY")
@@ -323,6 +324,18 @@ def main(argv: list[str] | None = None) -> int:
                     api_key=api_key,
                     confirmed_third_party=args.confirm_third_party,
                     force=args.force_translation,
+                    thinking_enabled=args.thinking_mode == "enabled",
+                    reasoning_effort=args.reasoning_effort,
+                )
+            if service.cheat_labels_need_translation(stage):
+                if not args.confirm_third_party:
+                    raise Game2ApkError("作弊菜单标签翻译需要 --confirm-third-party 确认")
+                if api_key is None:
+                    api_key = _read_cli_secret(args, "api_key", "DeepSeek API key", default_env="DEEPSEEK_API_KEY")
+                cheat_translation = service.translate_cheat_labels(
+                    stage,
+                    api_key=api_key,
+                    confirmed_third_party=True,
                     thinking_enabled=args.thinking_mode == "enabled",
                     reasoning_effort=args.reasoning_effort,
                 )
@@ -341,6 +354,7 @@ def main(argv: list[str] | None = None) -> int:
                     "inspection": inspection.to_dict(),
                     "stage": stage.to_dict(),
                     "translation": translation.to_dict() if translation else None,
+                    "cheatTranslation": cheat_translation.to_dict() if cheat_translation else None,
                     "build": result.to_dict(),
                     "signing": signing,
                     "verification": verification.to_dict(),

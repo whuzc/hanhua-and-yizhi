@@ -890,6 +890,7 @@ class TranslationService:
         max_concurrency: int = DEFAULT_TRANSLATION_CONCURRENCY,
         thinking_enabled: bool = DEFAULT_TRANSLATION_THINKING_ENABLED,
         reasoning_effort: str = DEFAULT_TRANSLATION_REASONING_EFFORT,
+        entry_kinds: set[str] | None = None,
     ) -> TranslationReport:
         batch_size = _setting_int(
             "GAME2APK_TRANSLATION_BATCH_SIZE",
@@ -908,6 +909,9 @@ class TranslationService:
         reasoning_effort = normalize_reasoning_effort(reasoning_effort)
         model = normalize_model(model)
         source_entries = extract_safe_entries(www)
+        if entry_kinds is not None:
+            allowed_kinds = {str(kind) for kind in entry_kinds}
+            source_entries = [entry for entry in source_entries if entry.kind in allowed_kinds]
         # Translation is opt-in, but even an explicit opt-in must never send
         # already-Chinese-only blocks for rewriting.  Mixed blocks remain
         # coherent context and have Han runs protected in _request_batch.

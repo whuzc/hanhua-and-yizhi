@@ -345,6 +345,16 @@ class WizardApp:
                 if not bool(settings["confirm"]):
                     raise Game2ApkError("翻译前必须勾选第三方 DeepSeek 发送确认")
                 self.service.translate(stage, api_key=settings["api_key"], confirmed_third_party=True, force=True)
+            if self.service.cheat_labels_need_translation(stage):
+                if not bool(settings["confirm"]):
+                    raise Game2ApkError("作弊菜单标签翻译需要确认向 DeepSeek 发送变量/开关名称")
+                self.service.translate_cheat_labels(
+                    stage,
+                    api_key=settings["api_key"],
+                    confirmed_third_party=True,
+                    thinking_enabled=DEFAULT_TRANSLATION_THINKING_ENABLED,
+                    reasoning_effort=DEFAULT_TRANSLATION_REASONING_EFFORT,
+                )
             if not resumed:
                 self.service.mark_prepared(stage)
             configured_tools = discover_configured(str(settings["template"]))

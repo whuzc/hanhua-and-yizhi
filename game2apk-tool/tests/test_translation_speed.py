@@ -136,6 +136,43 @@ class TranslationSpeedTests(unittest.TestCase):
                 self.assertEqual(payload["thinking"], {"type": "disabled"})
                 self.assertNotIn("reasoning_effort", payload)
 
+    def test_cheat_label_scope_translates_system_labels_without_dialogue(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            www = self._www(root)
+            (www / "data" / "System.json").write_text(
+                json.dumps(
+                    {
+                        "gameTitle": "中文游戏",
+                        "terms": {},
+                        "variables": ["", "ステEXP淫乱", "已经中文"],
+                        "switches": ["", "ギャラリー解放"],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            transport = _ParallelTransport()
+            report = TranslationService().translate(
+                www,
+                api_key="not-a-real-key",
+                transport=transport,
+                memory_path=root / "memory.json",
+                confirmed_third_party=True,
+                force=True,
+                entry_kinds={"system-variable", "system-switch"},
+                batch_size=100,
+                max_concurrency=1,
+            )
+            self.assertEqual(report.entries_total, 2)
+            self.assertEqual(report.entries_applied, 2)
+            system = json.loads((www / "data" / "System.json").read_text(encoding="utf-8"))
+            self.assertEqual(system["variables"][1], "ステEXP淫乱 [zh]")
+            self.assertEqual(system["switches"][1], "ギャラリー解放 [zh]")
+            dialogue = json.loads((www / "data" / "Map001.json").read_text(encoding="utf-8"))
+            values = [command["parameters"][0] for command in dialogue["events"][1]["pages"][0]["list"] if command["code"] == 401]
+            self.assertEqual(values[0], "One")
+
     def test_model_aliases_normalize_to_official_identifier(self) -> None:
         self.assertEqual(normalize_model("v4flash"), DEFAULT_TRANSLATION_MODEL)
         self.assertEqual(normalize_model("deepseek-v4flash"), DEFAULT_TRANSLATION_MODEL)

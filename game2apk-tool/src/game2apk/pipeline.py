@@ -18,7 +18,7 @@ from .patcher import patch_staged_www
 from .security import atomic_write_json, atomic_write_text, now_utc
 from .signing import SigningService
 from .staging import StageService
-from .translation import TranslationService, extract_safe_entries, recommend_skip_translation
+from .translation import TranslationService, extract_safe_entries, filter_non_chinese_entries, recommend_skip_translation
 from .verifier import VerificationService
 
 
@@ -117,7 +117,12 @@ class PipelineService:
         return result
 
     def translation_recommendation(self, stage: StageManifest) -> bool:
-        return recommend_skip_translation(extract_safe_entries(stage.staged_www))
+        entries = [
+            entry
+            for entry in extract_safe_entries(stage.staged_www)
+            if entry.kind not in {"system-variable", "system-switch"}
+        ]
+        return recommend_skip_translation(entries)
 
     def translate(self, stage: StageManifest, **kwargs: Any) -> TranslationReport:
         report = TranslationService(self.progress, self.cancel_event).translate(
@@ -126,6 +131,42 @@ class PipelineService:
             **kwargs,
         )
         self._record_translation_modifications(stage, report)
+        return report
+
+    def cheat_labels_need_translation(self, stage: StageManifest) -> bool:
+        """Return whether the mandatory cheat-menu label pass has work."""
+
+        labels = [
+            entry
+            for entry in extract_safe_entries(stage.staged_www)
+            if entry.kind in {"system-variable", "system-switch"}
+        ]
+        return bool(filter_non_chinese_entries(labels))
+
+    def translate_cheat_labels(self, stage: StageManifest, **kwargs: Any) -> TranslationReport:
+        """Translate only the labels exposed by the dynamic cheat menu.
+
+        This pass is intentionally separate from optional game-text
+        translation: a user may keep the game's existing Chinese dialogue,
+        while the cheat controls still receive Chinese labels.
+        """
+
+        # This pass is always explicit and must not be accidentally disabled
+        # by a caller forwarding the optional full-text ``force`` setting.
+        kwargs.pop("force", None)
+        report = TranslationService(self.progress, self.cancel_event).translate(
+            stage.staged_www,
+            memory_path=self.state_root / "translation-memory.json",
+            entry_kinds={"system-variable", "system-switch"},
+            force=True,
+            **kwargs,
+        )
+        self._record_translation_modifications(stage, report)
+        if report.failures or report.entries_applied < report.entries_total:
+            raise BlockedError(
+                "mandatory cheat-label translation did not complete; "
+                f"{len(report.failures)} label block(s) failed"
+            )
         return report
 
     def _record_translation_modifications(self, stage: StageManifest, report: TranslationReport) -> None:

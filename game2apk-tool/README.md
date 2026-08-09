@@ -1,6 +1,6 @@
 # game2apk-tool
 
-当前发布候选为工具 `v1.3.3`；生成 APK 默认 versionCode `8`、versionName `1.3.0`（由 7/1.2.0 升级），包含动态作弊菜单、可逆无敌、战斗胜负控制、事件回想传送、加密音频修复，以及签名产物命名和高级作弊标签修复。
+当前发布候选为工具 `v1.3.4`；生成 APK 默认 versionCode `8`、versionName `1.3.0`（由 7/1.2.0 升级），包含动态作弊菜单、可逆无敌、战斗胜负控制、事件回想传送、加密音频修复，以及签名产物命名和强制作弊标签翻译。
 
 Windows 本地工具：检查 RPG Maker MV、在受标记的 `.work` 副本中暂存和补丁、可选离线翻译、Gradle 构建、稳定签名并做 APK 静态验收。原游戏目录只读；本项目不生成 AAB。
 
@@ -22,7 +22,7 @@ python .\game2apk-tool\scripts\game2apk.py run ".\仙肴圣餐超魔改 Ver22" `
 
 签名密码留空不等于“静默生成未签名 APK”：如果当前用户已有该 applicationId 的 DPAPI 签名状态，工具会自动使用它；没有可用状态且未提供密码时任务会阻止签名。Gradle 的 `app-release-unsigned.apk` 只作为签名输入；签名成功后会在同一目录改名为 `app-release-signed.apk`，最终交付包仍复制到 `dist` 并带有 `-signed.apk` 后缀。是否可安装以 `signing-report.json` 的 `finalSignedApk` 和 `verification-report.json` 的 `apksigner.passed/signatureCandidate` 为准。只有静态验收通过的 APK 才会复制到 `dist`。
 
-高级作弊菜单使用游戏 `data/System.json` 中的变量/开关标签。勾选翻译时，这些标签会和对话一起作为安全的非中文文本块发送给 DeepSeek；已经是中文的标签不会发送。未开启翻译时，日文编辑器标签会显示为中文分类和变量编号，原文仅保留在鼠标提示中。
+高级作弊菜单使用游戏 `data/System.json` 中的变量/开关标签，并且始终执行独立的标签翻译；已经是中文的标签不会发送。正文翻译仍然可选，因此中文游戏可以只翻译作弊菜单标签。标签存在非中文内容时，构建会要求确认向 DeepSeek 发送这些名称；没有确认或 API Key 会阻止构建，不会用分类编号冒充翻译。
 
 ## Android 输入契约
 
