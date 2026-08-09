@@ -1,6 +1,6 @@
 # game2apk-tool
 
-当前发布候选为工具 `v1.3.6`；生成 APK 默认 versionCode `8`、versionName `1.3.0`（由 7/1.2.0 升级），包含动态作弊菜单、可逆无敌、战斗胜负控制、事件回想传送、加密音频修复，以及签名产物命名和严格简体中文作弊标签翻译。
+当前发布候选为工具 `v1.3.7`；生成 APK 默认 versionCode `8`、versionName `1.3.0`（由 7/1.2.0 升级），包含动态作弊菜单、可逆无敌、战斗胜负控制、事件回想传送、加密音频修复，以及签名产物命名和严格简体中文作弊标签翻译批次恢复。
 
 Windows 本地工具：检查 RPG Maker MV、在受标记的 `.work` 副本中暂存和补丁、可选离线翻译、Gradle 构建、稳定签名并做 APK 静态验收。原游戏目录只读；本项目不生成 AAB。
 
@@ -68,7 +68,7 @@ portable 不得包含原游戏、存档、APK、AAB、keystore、DPAPI 文件或
 - **工具链自动发现**：启动时优先读取已存在的 `ANDROID_SDK_ROOT`、`ANDROID_HOME`、`JAVA_HOME`、`PATH`、Android Studio 默认目录和用户配置；如果本机已有 Android 工具，会直接调用，不重复安装。缺少组件时仅在用户点击下载并确认后访问官方 HTTPS 地址，安装目录由用户选择。Command-line Tools 下载后仍需用户用 `sdkmanager` 或 Android Studio 安装项目所需的 platform/build-tools/platform-tools；工具不会静默接受许可证。
 - **可选 DeepSeek 翻译**：默认不联网、不翻译。勾选强制翻译并明确确认第三方传输后，使用环境变量名、stdin 或隐藏 prompt 提供 Key；Key 不出现在 argv、日志、报告、APK 或 portable。建议先备份并逐段审阅机器翻译结果。
 
-翻译默认使用官方模型 `deepseek-v4-flash`（输入 `v4flash` / `v4-flash` 会自动规范化），默认开启 thinking 并使用 `high` 强度；界面可切换关闭 thinking，或选择 `low / high / max`，以在自然度和速度之间取舍。默认每批 20 个文本块、最多 4 路并发，并启用相同文本去重、翻译缓存和限流重试。RPG Maker MV 的连续对话行会作为一个完整消息块交给模型，按上下文翻译并保留行数/顺序，不会按单词逐个翻译。可用 `GAME2APK_TRANSLATION_CONCURRENCY`（1–8）与 `GAME2APK_TRANSLATION_BATCH_SIZE`（1–100）按账号限流情况调整。完整策略与取舍见 [docs/translation-performance.md](docs/translation-performance.md)。
+翻译默认使用官方模型 `deepseek-v4-flash`（输入 `v4flash` / `v4-flash` 会自动规范化），默认开启 thinking 并使用 `high` 强度；界面可切换关闭 thinking，或选择 `low / high / max`，以在自然度和速度之间取舍。默认每批 20 个文本块、最多 4 路并发，并启用相同文本去重、翻译缓存和限流重试。RPG Maker MV 的连续对话行会作为一个完整消息块交给模型，按上下文翻译并保留行数/顺序，不会按单词逐个翻译。可用 `GAME2APK_TRANSLATION_CONCURRENCY`（1–8）与 `GAME2APK_TRANSLATION_BATCH_SIZE`（1–100）按账号限流情况调整；高级作弊标签另有 24 条/2 路并发上限，并在响应过大时自动拆分恢复。完整策略与取舍见 [docs/translation-performance.md](../docs/translation-performance.md)。
 - **签名与静态验收**：沿用固定 `applicationId=com.game2apk.xianyaoshengcanver22`、`versionCode=8`、`versionName=1.3.0` 的升级身份，自动完成 zipalign/apksigner/manifest/资源清单等静态检查；没有连接手机时不会宣称已完成实机验证。
 - **手机输入契约**：悬浮层保留确认、取消、ESC、立绘和四向方向键；方向键按住持续、抬起立即释放。单指点击游戏区保持 MV 原触摸语义（选项、地图目的地、dash、NPC/事件互动），单指长按加速文本；双指轻点发送一次返回/取消，三指和多余触点被忽略。悬浮层可以隐藏，避免遮挡原游戏。
 - **内置作弊器**：右上角入口可打开金币 `999999999`、角色字段编辑（等级、经验、HP/MP、基础参数及游戏存在的淫欲等扩展字段）、免费物品商店、无敌、回想房间传送、战斗强制胜利/失败。高级菜单在游戏运行时读取 `$dataSystem.variables`、`switches` 和 `$dataMapInfos`，按游戏原名自动生成变量/开关/回想候选并用关键词标注欲望、感度、成长、关系等类别；没有命名的变量不会被全部暴露，而是保留通用白名单回退。语义识别是候选提示，不会猜测未命名插件内部字段，也不保证不同游戏的同名变量含义相同。免费商店不做购买限额保护，仅提示按需购买；无敌开启时保存当前 HP/攻击/防御快照，关闭时按角色当前正常值恢复而不是覆盖升级后新值。作弊可能破坏事件、数值或存档，请复制存档后按需使用。

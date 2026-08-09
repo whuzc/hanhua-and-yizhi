@@ -41,6 +41,12 @@ DEFAULT_TRANSLATION_REASONING_EFFORT = "high"
 TRANSLATION_REASONING_EFFORTS = ("low", "high", "max")
 MAX_TRANSLATION_BATCH_SIZE = 100
 MAX_TRANSLATION_CONCURRENCY = 8
+# V4 Flash can spend part of its completion budget on thinking.  Keeping the
+# mandatory cheat-label requests smaller and less concurrent avoids a single
+# truncated JSON response invalidating a whole build, while still allowing
+# duplicate labels to be reused from the memory cache.
+CHEAT_LABEL_MAX_BATCH_SIZE = 24
+CHEAT_LABEL_MAX_CONCURRENCY = 2
 _TRANSIENT_HTTP_STATUSES = {408, 425, 429, 500, 502, 503, 504}
 
 
@@ -976,6 +982,96 @@ def _request_batch(
     raise TranslationError(str(last_error or "translation request failed"))
 
 
+def _is_batch_shape_error(error: Exception) -> bool:
+    """Whether a provider response should be retried as smaller batches.
+
+    This deliberately excludes authentication, quota, and connection errors:
+    splitting those would multiply requests without changing the cause.  The
+    selected messages are the failures produced when JSON output is truncated,
+    malformed, or missing requested IDs because the completion was too large.
+    """
+
+    if isinstance(error, DeepSeekHTTPError):
+        detail = str(error).casefold()
+        if error.status == 413:
+            return True
+        return error.status in {400, 422} and any(
+            marker in detail for marker in ("context", "token", "too large", "maximum", "length")
+        )
+    detail = str(error).casefold()
+    return any(
+        marker in detail
+        for marker in (
+            "response was not complete",
+            "json output could not be parsed",
+            "translation json must",
+            "translation ids do not match",
+            "translation ids are duplicated",
+            "response content is empty",
+        )
+    )
+
+
+def _request_batch_with_recovery(
+    transport: TranslationTransport,
+    api_key: str,
+    model: str,
+    target_language: str,
+    entries: list[TranslationEntry],
+    thinking_enabled: bool,
+    reasoning_effort: str,
+    cancel_event=None,
+    strict_simplified_chinese: bool = False,
+) -> dict[str, list[str]]:
+    """Request a batch and halve it when the provider cannot serialize it.
+
+    The first request remains bounded by the strict batch cap.  Splitting is a
+    recovery path for providers that still truncate at that size; successful
+    child responses are merged only when every child succeeds, so callers never
+    apply a partial response under the original batch's identity.
+    """
+
+    try:
+        return _request_batch(
+            transport,
+            api_key,
+            model,
+            target_language,
+            entries,
+            thinking_enabled,
+            reasoning_effort,
+            cancel_event,
+            strict_simplified_chinese,
+        )
+    except (DeepSeekHTTPError, TranslationError) as exc:
+        if not strict_simplified_chinese or len(entries) <= 1 or not _is_batch_shape_error(exc):
+            raise
+        midpoint = max(1, len(entries) // 2)
+        first = _request_batch_with_recovery(
+            transport,
+            api_key,
+            model,
+            target_language,
+            entries[:midpoint],
+            thinking_enabled,
+            reasoning_effort,
+            cancel_event,
+            strict_simplified_chinese,
+        )
+        second = _request_batch_with_recovery(
+            transport,
+            api_key,
+            model,
+            target_language,
+            entries[midpoint:],
+            thinking_enabled,
+            reasoning_effort,
+            cancel_event,
+            strict_simplified_chinese,
+        )
+        return {**first, **second}
+
+
 def apply_translations(www: str | Path, entries: list[TranslationEntry], translations: dict[str, list[str]]) -> list[TranslationFailure]:
     root = Path(www).resolve(strict=True)
     grouped: dict[str, list[tuple[TranslationEntry, list[str]]]] = {}
@@ -1065,6 +1161,9 @@ class TranslationService:
             and allowed_kinds <= CHEAT_LABEL_KINDS
             and _is_simplified_chinese_target(target_language)
         )
+        if strict_simplified_chinese:
+            batch_size = min(batch_size, CHEAT_LABEL_MAX_BATCH_SIZE)
+            max_concurrency = min(max_concurrency, CHEAT_LABEL_MAX_CONCURRENCY)
         # Translation is opt-in, but even an explicit opt-in must never send
         # already-Chinese-only blocks for rewriting.  Mixed blocks remain
         # coherent context and have Han runs protected in _request_batch.
@@ -1182,7 +1281,7 @@ class TranslationService:
                 )
                 futures = [
                     executor.submit(
-                        _request_batch,
+                        _request_batch_with_recovery,
                         transport,
                         api_key,
                         model,
@@ -1229,7 +1328,8 @@ class TranslationService:
                             self.progress(
                                 "translate",
                                 min(1.0, completed / max(1, len(entries))),
-                                f"translated {min(len(entries), completed)}/{len(entries)} blocks",
+                                f"processed {min(len(entries), completed)}/{len(entries)} blocks; "
+                                f"applied {min(len(entries), report.entries_cached + len(translations))}",
                             )
                             break
                     if batch_translations is None:
@@ -1294,7 +1394,8 @@ class TranslationService:
                     self.progress(
                         "translate",
                         min(1.0, completed / max(1, len(entries))),
-                        f"translated {min(len(entries), completed)}/{len(entries)} blocks",
+                        f"processed {min(len(entries), completed)}/{len(entries)} blocks; "
+                        f"applied {min(len(entries), report.entries_cached + len(translations))}",
                     )
         except CancelledError:
             cancelled = True

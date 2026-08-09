@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import threading
+from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
 
@@ -15,10 +16,12 @@ from .errors import BlockedError
 from .inspector import inspect_game
 from .models import BuildConfig, BuildResult, InspectionReport, StageManifest, ToolchainInfo, TranslationReport, VerificationReport
 from .patcher import patch_staged_www
-from .security import atomic_write_json, atomic_write_text, now_utc
+from .security import atomic_write_json, atomic_write_text, now_utc, redact_text
 from .signing import SigningService
 from .staging import StageService
 from .translation import (
+    CHEAT_LABEL_MAX_BATCH_SIZE,
+    CHEAT_LABEL_MAX_CONCURRENCY,
     TranslationService,
     cheat_label_needs_translation,
     extract_safe_entries,
@@ -183,10 +186,11 @@ class PipelineService:
         # This pass is always explicit and must not be accidentally disabled
         # by a caller forwarding the optional full-text ``force`` setting.
         kwargs.pop("force", None)
-        # Cheat labels are short and the runtime exposes at most 384 of them;
-        # batching up to the service maximum avoids dozens of tiny requests
-        # while preserving each label as one indivisible segment.
-        kwargs.setdefault("batch_size", 100)
+        # Keep the mandatory label pass below V4 Flash's response truncation
+        # threshold. TranslationService also enforces these caps for direct
+        # callers, but setting them here makes the pipeline contract explicit.
+        kwargs.setdefault("batch_size", CHEAT_LABEL_MAX_BATCH_SIZE)
+        kwargs.setdefault("max_concurrency", CHEAT_LABEL_MAX_CONCURRENCY)
         report = TranslationService(self.progress, self.cancel_event).translate(
             stage.staged_www,
             memory_path=self.state_root / "translation-memory.json",
@@ -196,9 +200,21 @@ class PipelineService:
         )
         self._record_translation_modifications(stage, report)
         if report.failures or report.entries_applied < report.entries_total:
+            failed_count = max(len(report.failures), report.entries_total - report.entries_applied)
+            first_reason = "no successful response was applied"
+            if report.failures:
+                first_reason = str(report.failures[0].reason)
+            api_key = str(kwargs.get("api_key") or "")
+            first_reason = redact_text(first_reason, (api_key,))[:240]
+            reason_counts = Counter(str(failure.reason) for failure in report.failures)
+            repeated = ""
+            if reason_counts:
+                repeated = f"; reason count: {reason_counts.most_common(1)[0][1]}"
+            report_hint = f"; report: {report.report_path}" if report.report_path else ""
             raise BlockedError(
                 "mandatory cheat-label translation did not complete; "
-                f"{len(report.failures)} label block(s) failed"
+                f"{failed_count} label block(s) failed; first failure: {first_reason}"
+                f"{repeated}{report_hint}"
             )
         return report
 

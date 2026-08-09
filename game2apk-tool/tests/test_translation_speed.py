@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from game2apk.errors import CancelledError
+from game2apk.errors import BlockedError, CancelledError, TranslationError
 from game2apk.models import TranslationEntry
 from game2apk.translation import (
     CHEAT_VISIBLE_SWITCH_LIMIT,
@@ -107,6 +107,23 @@ class _StrictChineseLabelTransport:
                 }
             ]
         }
+
+
+class _SizeLimitedStrictTransport(_StrictChineseLabelTransport):
+    """Simulate a provider truncating or rejecting an oversized JSON batch."""
+
+    def __init__(self, limit: int = 8) -> None:
+        super().__init__()
+        self.limit = limit
+        self.max_items = 0
+
+    def chat(self, payload: dict, api_key: str) -> dict:
+        prompt = payload["messages"][-1]["content"]
+        items = json.loads(prompt.split("INPUT=", 1)[1])
+        self.max_items = max(self.max_items, len(items))
+        if len(items) > self.limit:
+            raise TranslationError("DeepSeek response was not complete: length")
+        return super().chat(payload, api_key)
 
 
 class TranslationSpeedTests(unittest.TestCase):
@@ -224,6 +241,74 @@ class TranslationSpeedTests(unittest.TestCase):
             dialogue = json.loads((www / "data" / "Map001.json").read_text(encoding="utf-8"))
             values = [command["parameters"][0] for command in dialogue["events"][1]["pages"][0]["list"] if command["code"] == 401]
             self.assertEqual(values[0], "One")
+
+    def test_strict_cheat_batches_are_bounded_for_provider_output_limits(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            www = self._www(root)
+            (www / "data" / "System.json").write_text(
+                json.dumps(
+                    {
+                        "gameTitle": "Demo",
+                        "locale": "ja_JP",
+                        "terms": {},
+                        "variables": [""] + [f"発情メッセージ{i}" for i in range(1, 61)],
+                        "switches": [""],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            transport = _SizeLimitedStrictTransport(limit=8)
+            report = TranslationService().translate(
+                www,
+                api_key="not-a-real-key",
+                transport=transport,
+                memory_path=root / "memory.json",
+                confirmed_third_party=True,
+                force=True,
+                entry_kinds={"system-variable", "system-switch"},
+                batch_size=100,
+                max_concurrency=4,
+            )
+            self.assertEqual(report.entries_total, 60)
+            self.assertEqual(report.entries_applied, 60)
+            self.assertFalse(report.failures)
+            # The service caps the initial strict request at the safe batch
+            # size, then recursively halves only when this synthetic provider
+            # reports a truncated response.
+            self.assertLessEqual(transport.max_items, 24)
+
+    def test_pipeline_reports_first_cheat_label_failure_reason_without_key(self) -> None:
+        from types import SimpleNamespace
+        from game2apk.pipeline import PipelineService
+
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            www = self._www(root)
+            (www / "data" / "System.json").write_text(
+                json.dumps(
+                    {"gameTitle": "Demo", "locale": "ja_JP", "terms": {}, "variables": ["", "発情中"], "switches": [""]},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            class AlwaysFailTransport:
+                def chat(self, _payload: dict, api_key: str) -> dict:
+                    raise RuntimeError(f"synthetic provider failure for {api_key}")
+
+            with self.assertRaises(BlockedError) as raised:
+                PipelineService(root).translate_cheat_labels(
+                    SimpleNamespace(staged_www=str(www), manifest_path=None),
+                    api_key="secret-token",
+                    transport=AlwaysFailTransport(),
+                    confirmed_third_party=True,
+                )
+            message = str(raised.exception)
+            self.assertIn("first failure", message)
+            self.assertIn("synthetic provider failure", message)
+            self.assertNotIn("secret-token", message)
 
     def test_strict_cheat_labels_reject_japanese_or_english_echo(self) -> None:
         with TemporaryDirectory() as temporary:
