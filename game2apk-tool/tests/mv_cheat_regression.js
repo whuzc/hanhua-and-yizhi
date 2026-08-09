@@ -7,7 +7,7 @@ for (const token of [
   'gainHp', 'changeLevel', '2010', '2034', '2085', 'reserveTransfer',
   'processVictory', 'processDefeat', 'g2a-win', 'g2a-lose', 'isBattleActive',
   'paramDelta', 'naturalHp', 'godHp', 'battleOverride', 'refreshBattleControls', '仅能在战斗进行中使用',
-  'recallMapIds = [136, 97]', 'cheat.discover', 'dynamicCatalog', 'classifyField',
+  'recallMapIds = [136, 97]', 'cheat.discover', 'dynamicCatalog', 'classifyField', 'displayLabel',
   'switchFields', 'recallCandidates', '自动识别'
 ]) {
   if (!bridge.includes(token)) throw new Error(`missing cheat contract: ${token}`);
@@ -23,6 +23,9 @@ if (bridge.includes('a._paramPlus = s.paramPlus.slice()')) {
 }
 if (!bridge.includes('entry.naturalHp = actor._hp') || !bridge.includes('clamp(hp, 0, a.mhp)')) {
   throw new Error('god toggle must track natural HP and clamp it after removing the HP boost');
+}
+if (!bridge.includes("title=\"原始标签：") || !bridge.includes('var label=cheat.displayLabel(f)')) {
+  throw new Error('advanced cheat controls must display translated/category labels with source tooltip');
 }
 if (bridge.includes('Game2ApkCheat.*eval') || bridge.includes('eval(')) {
   throw new Error('cheat bridge must not use eval');

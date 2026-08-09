@@ -210,6 +210,10 @@ class PipelineService:
             jdk_dir=result.toolchain.jdk_dir,
             input_role="Gradle assembleRelease unsigned APK input",
         )
+        # SigningService may rename Gradle's misleading ``*-unsigned.apk``
+        # output.  Carry the signed path forward so verification, promotion,
+        # GUI reports, and the web job all point at the same artifact.
+        result.apk_path = str(signing["finalSignedApk"])
         audit_path = Path(result.work_dir).parent / "signing-report.json"
         atomic_write_json(audit_path, {**signing, "generatedAtUtc": now_utc()})
         signing["auditPath"] = str(audit_path)
@@ -221,7 +225,7 @@ class PipelineService:
                 existing = ""
             audit_line = (
                 "[game2apk audit] inputRole=Gradle assembleRelease unsigned APK input; "
-                "signingMode=signed-in-place; outputRole=final signed release APK; "
+                f"signingMode={signing['signingMode']}; outputRole=final signed release APK; "
                 f"inputApk={signing['inputApk']}; finalSignedApk={signing['finalSignedApk']}"
             )
             atomic_write_text(log_path, existing.rstrip("\r\n") + "\n" + audit_line + "\n")

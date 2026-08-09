@@ -408,7 +408,7 @@ class WizardApp:
                     result, verification, promoted = value
                     self.cancel_button.configure(state="disabled")
                     promoted_text = f"\n交付 APK：{promoted}" if promoted else ""
-                    self._show_report(self.report_text.get("1.0", "end") + f"\n\nAPK：{result.apk_path}\n静态签名候选：{verification.signature_candidate}\nSHA-256：{verification.sha256}{promoted_text}")
+                    self._show_report(self.report_text.get("1.0", "end") + f"\n\n签名 APK：{result.apk_path}\n静态签名候选：{verification.signature_candidate}\nSHA-256：{verification.sha256}{promoted_text}")
                     self.status_var.set("完成" if verification.passed else "已生成但静态验收未通过")
                     messagebox.showinfo("构建结果", self.status_var.get())
                     self.build_button.configure(state="normal")

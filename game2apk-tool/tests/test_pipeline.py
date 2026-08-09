@@ -261,6 +261,28 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(validate_placeholders("HP \\N[1] %1", "生命 \\N[1] %1")[0])
         self.assertFalse(validate_placeholders("HP \\N[1]", "生命")[0])
 
+    def test_system_variable_and_switch_labels_are_translation_entries(self) -> None:
+        labels_www = self.root / "labels-www"
+        (labels_www / "data").mkdir(parents=True)
+        (labels_www / "data" / "System.json").write_text(
+            json.dumps(
+                {
+                    "gameTitle": "Label demo",
+                    "terms": {},
+                    "variables": ["", "淫乱等级", "Sensitivity"],
+                    "switches": ["", "回想解锁", "Gallery unlocked"],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        entries = extract_safe_entries(labels_www)
+        labels = {(entry.kind, entry.locations[0], entry.source_text) for entry in entries}
+        self.assertIn(("system-variable", "/variables/1", "淫乱等级"), labels)
+        self.assertIn(("system-variable", "/variables/2", "Sensitivity"), labels)
+        self.assertIn(("system-switch", "/switches/1", "回想解锁"), labels)
+        self.assertIn(("system-switch", "/switches/2", "Gallery unlocked"), labels)
+
     def test_japanese_kana_prevents_chinese_skip_heuristic(self) -> None:
         entries = extract_safe_entries(self.www)
         self.assertTrue(any("Hello world" in entry.source_text for entry in entries))
@@ -503,6 +525,36 @@ class PipelineTests(unittest.TestCase):
             self.assertFalse(verified.device["verified"])
             self.assertTrue(verified.permissions["passed"])
             self.assertTrue(verified.stage_assets["passed"])
+
+    def test_signing_renames_gradle_unsigned_output_after_signing(self) -> None:
+        apk = self.root / "app-release-unsigned.apk"
+        apk.write_bytes(b"not-a-real-apk")
+        idsig = Path(str(apk) + ".idsig")
+        idsig.write_bytes(b"signature-id")
+        keystore = self.root / "game2apk.keystore"
+        keystore.write_bytes(b"keystore")
+        service = SigningService(self.root / ".state")
+
+        with mock.patch.object(
+            service,
+            "_ensure_keystore",
+            return_value=({"keystore": str(keystore)}, "secret"),
+        ):
+            report = service.sign_apk(
+                apk,
+                "com.game2apk.test",
+                apksigner="apksigner",
+                runner=lambda _command: (0, "signed"),
+            )
+
+        signed = self.root / "app-release-signed.apk"
+        self.assertFalse(apk.exists())
+        self.assertTrue(signed.exists())
+        self.assertFalse(idsig.exists())
+        self.assertTrue(Path(str(signed) + ".idsig").exists())
+        self.assertEqual(report["inputApk"], str(apk.resolve()))
+        self.assertEqual(report["finalSignedApk"], str(signed.resolve()))
+        self.assertEqual(report["outputRole"], "final signed release APK")
 
     def test_signing_state_never_reports_plain_password(self) -> None:
         status = SigningService(self.root / ".state").status("com.game2apk.test")

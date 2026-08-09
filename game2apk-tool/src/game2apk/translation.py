@@ -286,6 +286,23 @@ def _extract_system(relative_file: str, data: dict[str, Any]) -> list[Translatio
         entry = _make_entry(relative_file, "system-term", pointer_parts(pointer)[-1], [value], [pointer])
         if entry:
             result.append(entry)
+
+    # RPG Maker stores the editor-facing variable and switch labels in
+    # System.json.  They are displayed by the dynamic cheat panel, so they
+    # must travel through the same opt-in translation path as dialogue and
+    # choices.  Only the label arrays are allowed here; numeric game state and
+    # executable/plugin fields are never sent to the provider.
+    for key, kind in (("variables", "system-variable"), ("switches", "system-switch")):
+        values = data.get(key)
+        if not isinstance(values, list):
+            continue
+        for index, value in enumerate(values):
+            if not isinstance(value, str) or not value.strip():
+                continue
+            pointer = json_pointer(key, index)
+            entry = _make_entry(relative_file, kind, key, [value], [pointer])
+            if entry:
+                result.append(entry)
     return result
 
 

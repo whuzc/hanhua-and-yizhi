@@ -244,13 +244,35 @@ class SigningService:
             return_code, output = runner(command)
         if return_code != 0:
             raise ExternalToolError(f"apksigner failed with exit code {return_code}: {redact_text(output, [effective_password])}")
+        # Gradle deliberately emits ``app-release-unsigned.apk`` even when
+        # apksigner signs the file in place.  Leaving that name in the release
+        # folder is misleading to users and to downstream file pickers.  Keep
+        # the Gradle input in the audit report, but expose the signed output
+        # with an explicit name and move the optional v4 sidecar alongside it.
+        final_apk = apk
+        renamed = False
+        suffix = "-unsigned.apk"
+        if apk.name.casefold().endswith(suffix):
+            target = apk.with_name(apk.name[: -len(suffix)] + "-signed.apk")
+            if target.exists():
+                raise ExternalToolError(f"signed APK target already exists: {target}")
+            apk.replace(target)
+            source_idsig = Path(str(apk) + ".idsig")
+            target_idsig = Path(str(target) + ".idsig")
+            if source_idsig.exists():
+                if target_idsig.exists():
+                    raise ExternalToolError(f"signed APK sidecar target already exists: {target_idsig}")
+                source_idsig.replace(target_idsig)
+            final_apk = target
+            renamed = True
         return {
-            "apk": str(apk),
+            "apk": str(final_apk),
             "inputApk": str(apk),
             "inputRole": input_role,
-            "signingMode": "signed-in-place",
+            "signingMode": "signed-in-place-renamed" if renamed else "signed-in-place",
             "signedInPlace": True,
-            "finalSignedApk": str(apk),
+            "finalSignedApk": str(final_apk),
+            "renamedFromUnsigned": renamed,
             "outputRole": "final signed release APK",
             "applicationId": application_id,
             "keystore": str(state["keystore"]),

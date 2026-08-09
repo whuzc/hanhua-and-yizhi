@@ -36,7 +36,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-portable.ps1
 
 Android 更新候选需确认 applicationId `com.game2apk.xianyaoshengcanver22`、versionCode 8、versionName 1.3.0、同一证书、非 debuggable、无 INTERNET、默认 icon 非空、zipalign/apksigner 通过、assets 严格对账且无 save/secret/keystore。覆盖安装只允许 `adb install -r`；禁止卸载和清数据。WebView 存档保留规则见 `docs/storage-and-upgrade.md`；历史验收证据见 `docs/06-security-remediation-and-rebuild.md`。
 
-Gradle 的 `app-release-unsigned.apk` 只是文件名；本工具会在原路径 signed-in-place，必须查看签名/验收报告而不是只看文件名。留空签名密码时会尝试当前 applicationId 的 DPAPI 状态；没有状态又没有密码会直接阻止任务，避免交付真正未签名包。
+Gradle 的 `app-release-unsigned.apk` 只是签名输入文件名；签名成功后本工具会将它改名为 `app-release-signed.apk`，并将验收通过的交付包复制到 `dist`。留空签名密码时会尝试当前 applicationId 的 DPAPI 状态；没有状态又没有密码会直接阻止任务，避免交付真正未签名包。高级作弊标签沿用翻译后的 `System.json` 变量/开关名称；未翻译的日文标签会降级为中文分类和变量编号，原文放在提示中。
 
 ### 内置作弊器
 

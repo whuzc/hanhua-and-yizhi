@@ -128,6 +128,19 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
       if (/回想|recollection|gallery|scene/.test(text)) return '回想';
       return '自定义';
     };
+    // Prefer the translated System.json label.  If translation is disabled
+    // and a Japanese editor label remains, show a useful Chinese category and
+    // retain the source text only as a tooltip rather than exposing an opaque
+    // Japanese control in the visible menu.
+    cheat.displayLabel = function (field) {
+      var id = field && field[0], raw = String(field && field[1] || '').trim();
+      var category = String(field && field[2] || '自定义');
+      if (!raw) return category + '（变量 ' + id + '）';
+      var hasKana = /[\u3040-\u30ff\u31f0-\u31ff]/.test(raw);
+      var hasHan = /[\u3400-\u9fff]/.test(raw);
+      if (hasHan && !hasKana) return raw;
+      return category + '（变量 ' + id + '；原文：' + raw + '）';
+    };
     cheat.discover = function () {
       var variables = global.$dataSystem && global.$dataSystem.variables || [];
       var discovered = [], i, label;
@@ -373,10 +386,10 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
       } else if (recallButton) recallButton.disabled = true;
       var fields=[['level','等级'],['exp','经验'],['hp','HP'],['mp','MP'],['atk','攻击'],['def','防御'],['mat','魔攻'],['mdf','魔防'],['agi','敏捷'],['luk','幸运']];
       document.getElementById('g2a-fields').innerHTML=fields.map(function(f){return '<label style="display:inline-block;width:32%;margin:3px">'+f[1]+' <input id="g2a-'+f[0]+'" type="number" min="0" max="999999" style="width:75px"></label>';}).join('');
-      document.getElementById('g2a-custom').innerHTML=cheat.customFields.map(function(f){return '<label style="display:inline-block;width:48%;margin:3px">'+cheat.escapeHtml(f[1])+' <small>['+cheat.escapeHtml(f[2] || '自定义')+']</small> <input id="g2a-var-'+f[0]+'" type="number" min="0" max="999999" style="width:90px"></label>';}).join('');
+      document.getElementById('g2a-custom').innerHTML=cheat.customFields.map(function(f){var label=cheat.displayLabel(f); return '<label title="原始标签：'+cheat.escapeHtml(f[1])+'" style="display:inline-block;width:48%;margin:3px">'+cheat.escapeHtml(label)+' <input id="g2a-var-'+f[0]+'" type="number" min="0" max="999999" style="width:90px"></label>';}).join('');
       var switchContainer = document.getElementById('g2a-switches');
       if (!switchContainer) { switchContainer = document.createElement('div'); switchContainer.id = 'g2a-switches'; var customContainer = document.getElementById('g2a-custom'); if (customContainer && customContainer.parentNode) customContainer.parentNode.insertBefore(switchContainer, customContainer.nextSibling); }
-      switchContainer.innerHTML=cheat.switchFields.length ? '<h4>自动识别开关（默认不修改）</h4>'+cheat.switchFields.map(function(f){return '<label style="display:inline-block;width:48%;margin:3px"><input id="g2a-switch-'+f[0]+'" type="checkbox"> '+cheat.escapeHtml(f[1])+'</label>';}).join('') : '<small>未发现已命名的游戏开关。</small>';
+      switchContainer.innerHTML=cheat.switchFields.length ? '<h4>自动识别开关（默认不修改）</h4>'+cheat.switchFields.map(function(f){var label=cheat.displayLabel(f); return '<label title="原始标签：'+cheat.escapeHtml(f[1])+'" style="display:inline-block;width:48%;margin:3px"><input id="g2a-switch-'+f[0]+'" type="checkbox"> '+cheat.escapeHtml(label)+'</label>';}).join('') : '<small>未发现已命名的游戏开关。</small>';
       var switchButton = document.getElementById('g2a-apply-switches');
       if (!switchButton) { switchButton = document.createElement('button'); switchButton.id = 'g2a-apply-switches'; switchButton.textContent = '应用开关'; if (switchContainer && switchContainer.parentNode) switchContainer.parentNode.insertBefore(switchButton, switchContainer.nextSibling); }
       document.getElementById('g2a-close').onclick=cheat.close; document.getElementById('g2a-gold').onclick=cheat.addGold; document.getElementById('g2a-shop').onclick=cheat.openShop; document.getElementById('g2a-god').onchange=function(){cheat.toggleGod(this.checked);}; document.getElementById('g2a-apply').onclick=cheat.applyActor; document.getElementById('g2a-apply-custom').onclick=cheat.applyCustom; switchButton.onclick=cheat.applySwitches; document.getElementById('g2a-actor').onchange=cheat.refresh; document.getElementById('g2a-recall').onclick=cheat.toRecall; document.getElementById('g2a-win').onclick=function(){cheat.forceBattleResult(0);}; document.getElementById('g2a-lose').onclick=function(){cheat.forceBattleResult(2);};

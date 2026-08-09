@@ -502,10 +502,16 @@ class JobManager:
                 verification = service.verify(result, request.config, install=False)
                 promoted = service.promote(verification, request.config) if verification.signature_candidate and verification.passed else None
                 verification_passed = bool(verification.passed and verification.signature_candidate and promoted)
+                signed_apk_path = signing.get("finalSignedApk") or getattr(result, "apk_path", None)
                 partial.update(
                     {
+                        # Refresh the build record after signing: the Gradle
+                        # input may have been renamed from *-unsigned.apk to
+                        # the explicit signed artifact.
+                        "build": _json_safe(result),
                         "signing": _json_safe(signing),
                         "verification": _json_safe(verification),
+                        "signedApkPath": str(signed_apk_path) if signed_apk_path else None,
                         "distApkPath": str(promoted) if promoted else None,
                         "verificationPassed": verification_passed,
                     }
