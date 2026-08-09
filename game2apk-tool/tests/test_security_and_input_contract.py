@@ -18,6 +18,12 @@ from game2apk.verifier import _stage_asset_check
 
 
 class SecurityAndInputContractTests(unittest.TestCase):
+    def test_cli_run_translation_is_opt_in(self) -> None:
+        default = build_parser().parse_args(["run", "source", "--template", "template"])
+        self.assertFalse(default.translate)
+        selected = build_parser().parse_args(["run", "source", "--template", "template", "--translate"])
+        self.assertTrue(selected.translate)
+
     def test_supported_help_uses_secret_sources_not_raw_values(self) -> None:
         for command in ("translate", "sign", "run"):
             output = io.StringIO()

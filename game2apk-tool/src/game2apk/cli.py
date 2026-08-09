@@ -203,6 +203,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = sub.add_parser("run", help="run inspect -> stage -> patch -> build -> sign -> verify")
     run_parser.add_argument("source")
+    run_parser.add_argument("--translate", action="store_true", help="optionally translate selected MV text with DeepSeek; default is off")
     run_parser.add_argument("--template", required=True)
     run_parser.add_argument("--force-translation", action="store_true")
     run_parser.add_argument("--confirm-third-party", action="store_true")
@@ -301,10 +302,9 @@ def main(argv: list[str] | None = None) -> int:
             inspection = service.inspect(args.source)
             stage = service.stage(inspection)
             service.patch(stage, config)
-            recommendation = service.translation_recommendation(stage)
             translation = None
             api_key = None
-            if args.force_translation or not recommendation:
+            if args.translate or args.force_translation:
                 api_key = _read_cli_secret(args, "api_key", "DeepSeek API key", default_env="DEEPSEEK_API_KEY")
                 translation = service.translate(
                     stage,

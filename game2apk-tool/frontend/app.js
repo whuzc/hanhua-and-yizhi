@@ -15,6 +15,10 @@
   const thinkingMode = $("#translation-thinking");
   const reasoningEffort = $("#translation-effort");
   const thinkingHint = $("#translation-thinking-hint");
+  const translationToggle = $("#translate-toggle");
+  const translationConfirm = $("#translation-confirm");
+  const translationOptions = $("#translation-options");
+  const translationDetection = $("#translation-detection");
   const downloadButtons = [$("#download-android"), $("#download-jdk")];
   const root = document.documentElement;
 
@@ -34,6 +38,7 @@
   let inspected = false;
   let lastJobMessage = "";
   let reportStickToBottom = true;
+  let pollFailureCount = 0;
 
   const setText = (node, value) => { node.textContent = value == null ? "" : String(value); };
 
@@ -62,6 +67,19 @@
     return payload || {};
   };
 
+  const apiRetry = async (path, options = {}, attempts = 2) => {
+    let lastError;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        return await api(path, options);
+      } catch (error) {
+        lastError = error;
+        if (attempt + 1 < attempts) await new Promise((resolve) => window.setTimeout(resolve, 350));
+      }
+    }
+    throw lastError || new Error("local backend request failed");
+  };
+
   const setHealth = (kind, label) => {
     healthPill.className = `status-pill status-${kind}`;
     setText(healthPill.querySelector("span"), label);
@@ -79,6 +97,36 @@
     buildButton.disabled = running || !inspected;
     cancelButton.disabled = !running;
     downloadButtons.forEach((button) => { button.disabled = running; });
+  };
+
+  const resetTranslationChoice = (available) => {
+    translationToggle.disabled = !available;
+    if (!available) {
+      translationToggle.checked = false;
+      translationConfirm.checked = false;
+      translationOptions.hidden = true;
+    }
+  };
+
+  const renderTranslationDetection = (profile) => {
+    if (!translationDetection) return;
+    const detected = profile && profile.status === "detected";
+    const likelyChinese = Boolean(profile?.likelyChinese || profile?.predominantlyChinese);
+    translationDetection.className = `callout translation-detection ${detected && likelyChinese ? "ready" : "pending"}`;
+    translationDetection.dataset.languageState = detected ? (likelyChinese ? "chinese" : "mixed") : "unknown";
+    const ratio = Number(profile?.hanRatio);
+    const ratioText = Number.isFinite(ratio) ? `汉字比例约 ${(ratio * 100).toFixed(1)}%` : "未取得比例";
+    setText(
+      translationDetection.querySelector("strong"),
+      detected ? (likelyChinese ? `检测到已有中文（${ratioText}）` : `未检测到明显中文（${ratioText}）`) : "项目语言暂时无法判断",
+    );
+    setText(
+      translationDetection.querySelector("small"),
+      detected && likelyChinese
+        ? "默认不翻译；如确实需要，请手动勾选 DeepSeek 翻译并确认第三方传输。"
+        : "翻译是可选功能，默认关闭；需要时手动勾选并确认第三方传输。",
+    );
+    resetTranslationChoice(true);
   };
 
   const isReportNearBottom = () => (
@@ -209,10 +257,10 @@
     const field = $(selector);
     const initialDir = field.value.trim();
     try {
-      const payload = await api("/api/browse", {
+      const payload = await apiRetry("/api/browse", {
         method: "POST",
         body: JSON.stringify(initialDir ? { kind, initial_dir: initialDir } : { kind }),
-      });
+      }, 3);
       if (payload.selected && typeof payload.path === "string") {
         field.value = payload.path;
         if (kind === "source") {
@@ -285,6 +333,7 @@
     const status = job.status;
     currentJobId = null;
     currentJobKind = null;
+    pollFailureCount = 0;
     if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
     if (status === "completed") {
       setProgress(1, "任务完成");
@@ -292,6 +341,7 @@
       if (job.kind === "inspect") {
         const inspection = result.inspection || result;
         inspected = typeof result.buildReady === "boolean" ? result.buildReady : inspection?.status !== "blocked";
+        renderTranslationDetection(result.translation);
         log(inspected ? "检查通过" : "检查被阻止", jsonPreview(inspection), inspected ? "success" : "error");
       } else if (job.kind === "download") {
         if (result.health) renderToolchain(result.health);
@@ -324,6 +374,7 @@
   const pollJob = async (jobId) => {
     try {
       const payload = await api(`/api/jobs/${encodeURIComponent(jobId)}`, { headers: { Accept: "application/json" } });
+      pollFailureCount = 0;
       const job = payload.job || payload;
       renderJob(job);
       if (currentJobId === jobId && !["completed", "failed", "cancelled"].includes(job.status)) {
@@ -331,9 +382,19 @@
       }
     } catch (error) {
       if (currentJobId === jobId) {
-        currentJobId = null;
-        log("无法读取任务状态", error instanceof Error ? error.message : "本地后台连接已中断。", "error");
-        setTaskButtons(false);
+        pollFailureCount += 1;
+        const retryDelay = Math.min(5000, 500 * (2 ** Math.min(3, pollFailureCount - 1)));
+        if ([1, 3, 6, 12].includes(pollFailureCount)) {
+          log("后台连接暂时中断，正在重试", `${error instanceof Error ? error.message : "Failed to fetch"}；第 ${pollFailureCount} 次重试`, "warn");
+        }
+        setText(reportState, "后台重连中");
+        if (pollFailureCount < 12) {
+          pollTimer = window.setTimeout(() => pollJob(jobId), retryDelay);
+        } else {
+          currentJobId = null;
+          log("无法读取任务状态", "后台可能已关闭，请重新启动 game2apk-ui.exe；任务结果需重新检查。", "error");
+          setTaskButtons(false);
+        }
       }
     }
   };
@@ -348,6 +409,7 @@
       const jobId = jobIdFrom(payload);
       currentJobId = jobId;
       currentJobKind = kind;
+      pollFailureCount = 0;
       const title = kind === "inspect" ? "已提交检查" : (kind === "download" ? "已提交工具下载" : "已提交构建");
       log(title, `任务编号：${jobId}`, "info");
       void pollJob(jobId);
@@ -361,6 +423,7 @@
     const source = $("#source-path").value.trim();
     if (!source) { log("需要项目路径", "请先点击“浏览目录”选择游戏根目录或 www 目录。", "warn"); return; }
     inspected = false;
+    resetTranslationChoice(false);
     buildButton.disabled = true;
     void startJob("/api/inspect", { source }, "inspect");
   };
@@ -434,9 +497,10 @@
     const sourceField = $("#source-path");
     sourceField.addEventListener("input", () => {
       inspected = false;
+      resetTranslationChoice(false);
       if (!currentJobId) buildButton.disabled = true;
     });
-    $("#translate-toggle").addEventListener("change", (event) => { $("#translation-options").hidden = !event.target.checked; });
+    translationToggle.addEventListener("change", (event) => { translationOptions.hidden = !event.target.checked; });
     const updateThinkingControls = () => {
       const enabled = thinkingMode.value === "enabled";
       reasoningEffort.disabled = !enabled;
@@ -449,6 +513,7 @@
     };
     thinkingMode.addEventListener("change", updateThinkingControls);
     updateThinkingControls();
+    resetTranslationChoice(false);
     await refreshToolchain();
     void heartbeat();
     heartbeatTimer = window.setInterval(() => void heartbeat(), 5000);

@@ -37,7 +37,9 @@ from .toolchain import COMPONENTS, discover_configured, download_component, load
 from .translation import (
     DEFAULT_TRANSLATION_REASONING_EFFORT,
     DEFAULT_TRANSLATION_THINKING_ENABLED,
+    extract_safe_entries,
     normalize_reasoning_effort,
+    translation_language_profile,
 )
 
 
@@ -67,6 +69,34 @@ def _json_safe(value: Any) -> dict[str, Any]:
     # JSON round-tripping also gives callers a detached copy before a job puts
     # a report into its public state.
     return json.loads(json.dumps(value, ensure_ascii=False))
+
+
+def _translation_profile_for_report(report: Any, progress: Callable[[str, float, str], None] | None = None) -> dict[str, Any]:
+    """Inspect text language without sending anything to a translation API."""
+
+    www_root = getattr(report, "www_root", None)
+    if not isinstance(www_root, str) or not Path(www_root).is_dir():
+        return {
+            "status": "unavailable",
+            "entries": 0,
+            "characters": 0,
+            "hanCharacters": 0,
+            "kanaCharacters": 0,
+            "hanRatio": 0.0,
+            "likelyChinese": False,
+            "likelyJapanese": False,
+            "predominantlyChinese": False,
+            "translationRecommended": False,
+            "defaultTranslate": False,
+        }
+    if progress is not None:
+        progress("inspect", 0.88, "analyzing source language; no text is sent")
+    try:
+        profile = translation_language_profile(extract_safe_entries(www_root))
+    except (OSError, ValueError, TypeError):
+        return {"status": "unavailable", "defaultTranslate": False}
+    profile["status"] = "detected"
+    return profile
 
 
 def _path_text(value: Any, field_name: str) -> str:
@@ -316,6 +346,12 @@ class JobManager:
         with self._lock:
             return self._jobs.get(job_id)
 
+    def has_active_jobs(self) -> bool:
+        """Keep the backend alive while a build/translation is still running."""
+
+        with self._lock:
+            return any(not job._terminal() for job in self._jobs.values())
+
     def submit_inspect(self, source: str | Path) -> Job:
         source_path = _existing_directory(str(source), "source")
         job = self._new_job("inspect")
@@ -335,7 +371,8 @@ class JobManager:
                 report = service.inspect(source_path)
                 if job.cancel_event.is_set():
                     raise CancelledError("inspection cancelled")
-                job.set_result({"inspection": _json_safe(report), "buildReady": not report.blocked})
+                language = _translation_profile_for_report(report, job.update_progress)
+                job.set_result({"inspection": _json_safe(report), "translation": language, "buildReady": not report.blocked})
                 job.finish_completed("inspection completed" if not report.blocked else "inspection completed with blocking findings")
             except CancelledError:
                 job.finish_cancelled()
@@ -375,7 +412,12 @@ class JobManager:
                 service.patch(stage, request.config)
                 if job.cancel_event.is_set():
                     raise CancelledError("build cancelled")
-                partial = {"inspection": _json_safe(inspection), "stage": {"projectId": stage.project_id, "sourceUnchanged": stage.source_unchanged}}
+                language = _translation_profile_for_report(inspection, job.update_progress)
+                partial = {
+                    "inspection": _json_safe(inspection),
+                    "translationProfile": language,
+                    "stage": {"projectId": stage.project_id, "sourceUnchanged": stage.source_unchanged},
+                }
                 if request.translate:
                     if not request.confirm:
                         raise ConfigurationError("translation requires explicit third-party confirmation")
@@ -623,6 +665,8 @@ class LocalBackendServer(ThreadingHTTPServer):
         return bool(
             self.browser_session_seen
             and self.idle_timeout_seconds > 0
+            and not self.jobs.has_active_jobs()
+            and not self.dialog_lock.locked()
             and time.monotonic() - self.last_heartbeat > self.idle_timeout_seconds
         )
 

@@ -348,8 +348,17 @@ def extract_safe_entries(www: str | Path) -> list[TranslationEntry]:
     return sorted(result, key=lambda entry: (entry.relative_file.casefold(), entry.locations, entry.entry_id))
 
 
-def recommend_skip_translation(entries: Iterable[TranslationEntry], threshold: float = 0.30) -> bool:
-    text = "\n".join(entry.source_text for entry in entries)
+def translation_language_profile(entries: Iterable[TranslationEntry], threshold: float = 0.30) -> dict[str, Any]:
+    """Return a small, explainable language signal for the inspection UI.
+
+    Han characters are shared by Chinese and Japanese, so this deliberately
+    reports a heuristic rather than claiming a perfect language classifier.
+    Kana is treated as a Japanese signal; a Han-heavy project with little or
+    no kana is labelled likely Chinese.  The result contains no source text.
+    """
+
+    values = list(entries)
+    text = "\n".join(entry.source_text for entry in values)
     cjk = len(_CJK_RE.findall(text))
     kana = len(_HIRAGANA_RE.findall(text)) + len(_KATAKANA_RE.findall(text))
     latin_or_digits = len(re.findall(r"[A-Za-z0-9]", text))
@@ -358,10 +367,28 @@ def recommend_skip_translation(entries: Iterable[TranslationEntry], threshold: f
     # of hiragana/katakana is therefore a Japanese signal. A small amount of
     # kana in a predominantly Chinese project (for example plugin labels or
     # retained names) must not force an unnecessary third-party translation.
-    kana_ratio = kana / max(1, cjk + kana + latin_or_digits)
-    if kana >= 2 and kana_ratio >= 0.02:
-        return False
-    return denominator > 0 and cjk / denominator >= threshold
+    kana_ratio = kana / max(1, denominator)
+    han_ratio = cjk / max(1, denominator)
+    likely_japanese = kana >= 2 and kana_ratio >= 0.02
+    likely_chinese = cjk > 0 and not likely_japanese and han_ratio >= threshold
+    return {
+        "entries": len(values),
+        "characters": len(text),
+        "hanCharacters": cjk,
+        "kanaCharacters": kana,
+        "latinOrDigitCharacters": latin_or_digits,
+        "hanRatio": round(han_ratio, 4),
+        "likelyChinese": likely_chinese,
+        "likelyJapanese": likely_japanese,
+        "predominantlyChinese": likely_chinese,
+        "translationRecommended": bool(denominator > 0 and not likely_chinese),
+        "defaultTranslate": False,
+    }
+
+
+def recommend_skip_translation(entries: Iterable[TranslationEntry], threshold: float = 0.30) -> bool:
+    profile = translation_language_profile(entries, threshold=threshold)
+    return bool(profile["predominantlyChinese"])
 
 
 def translation_memory_key(

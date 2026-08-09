@@ -24,6 +24,7 @@ from game2apk.translation import (
     TranslationService,
     apply_translations,
     extract_safe_entries,
+    translation_language_profile,
     validate_placeholders,
 )
 from game2apk.verifier import VerificationService
@@ -214,6 +215,19 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(recommend_skip_translation([chinese]))
         mainly_chinese = TranslationEntry("mixed", "Map001.json", "message", "message", ["\u4e2d" * 200 + "\u3042\u3044"], ["/x"], "z", [[]])
         self.assertTrue(recommend_skip_translation([mainly_chinese]))
+
+    def test_translation_language_profile_explains_chinese_default(self) -> None:
+        entries = extract_safe_entries(self.www)
+        profile = translation_language_profile(entries)
+        self.assertGreater(profile["characters"], 0)
+        self.assertFalse(profile["defaultTranslate"])
+        self.assertTrue(profile["translationRecommended"])
+        from game2apk.models import TranslationEntry
+
+        chinese = TranslationEntry("zh", "Map001.json", "message", "message", ["这是中文文本"], ["/x"], "y", [[]])
+        chinese_profile = translation_language_profile([chinese])
+        self.assertTrue(chinese_profile["likelyChinese"])
+        self.assertFalse(chinese_profile["translationRecommended"])
 
     def test_fake_translation_applies_and_cache_recovers(self) -> None:
         first_www = self.root / "first-www"
