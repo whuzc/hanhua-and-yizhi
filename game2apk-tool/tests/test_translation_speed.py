@@ -652,6 +652,31 @@ class TranslationSpeedTests(unittest.TestCase):
             self.assertEqual(len(Path(report.document_source_path).read_text(encoding="utf-8").splitlines()), 100)
             self.assertEqual(len(Path(report.document_result_path).read_text(encoding="utf-8").splitlines()), 100)
 
+    def test_ui_cheat_preview_can_bound_document_count(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            www = self._www(root)
+            labels = ["", *[f"鐧烘儏銉°儍銈汇兗{i}" for i in range(1, 193)]]
+            (www / "data" / "System.json").write_text(
+                json.dumps({"gameTitle": "Demo", "locale": "ja_JP", "terms": {}, "variables": labels, "switches": [""]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            transport = _DocumentTransport()
+            report = TranslationService().translate(
+                www,
+                api_key="not-a-real-key",
+                transport=transport,
+                memory_path=root / "memory.json",
+                confirmed_third_party=True,
+                force=True,
+                entry_kinds={"system-variable", "system-switch"},
+                document_max_entries=96,
+            )
+            self.assertEqual(report.entries_total, 192)
+            self.assertEqual(report.entries_applied, 192)
+            self.assertEqual(report.api_requests, 2)
+            self.assertEqual(len(transport.calls), 2)
+
     def test_document_repair_groups_kana_failures_into_one_retry(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -381,6 +381,10 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(catalog["items"][0]["sourceLabel"], "発情中")
         self.assertEqual(catalog["items"][0]["translatedLabel"], "发情中")
         self.assertEqual(system_path.read_bytes(), original_bytes)
+        # Cheat-label preview must not deserialize or overwrite the potentially
+        # huge body translation cache. It owns a separate cache for labels.
+        self.assertTrue((self.root / ".state" / "cheat-label-translation-memory.json").is_file())
+        self.assertFalse((self.root / ".state" / "translation-memory.json").exists())
 
     def test_safe_extraction_and_placeholder_validation(self) -> None:
         entries = extract_safe_entries(self.www)

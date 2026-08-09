@@ -1815,6 +1815,7 @@ class TranslationService:
         thinking_enabled: bool = DEFAULT_TRANSLATION_THINKING_ENABLED,
         reasoning_effort: str = DEFAULT_TRANSLATION_REASONING_EFFORT,
         entry_kinds: set[str] | None = None,
+        document_max_entries: int | None = None,
     ) -> TranslationReport:
         batch_size = _setting_int(
             "GAME2APK_TRANSLATION_BATCH_SIZE",
@@ -1851,6 +1852,14 @@ class TranslationService:
         if strict_simplified_chinese:
             batch_size = min(batch_size, CHEAT_LABEL_MAX_BATCH_SIZE)
             max_concurrency = min(max_concurrency, CHEAT_LABEL_MAX_CONCURRENCY)
+            if document_max_entries is not None:
+                try:
+                    document_max_entries = max(
+                        CHEAT_LABEL_DOCUMENT_MIN_ENTRIES,
+                        int(document_max_entries),
+                    )
+                except (TypeError, ValueError):
+                    raise ConfigurationError("document_max_entries must be an integer")
         # Translation is opt-in, but even an explicit opt-in must never send
         # already-Chinese-only blocks for rewriting.  Mixed blocks remain
         # coherent context and have Han runs protected in _request_batch.
@@ -1966,10 +1975,17 @@ class TranslationService:
             )
 
         if strict_simplified_chinese and len(pending) >= CHEAT_LABEL_DOCUMENT_MIN_ENTRIES:
-            # One compact TSV document keeps all labels in one context window;
-            # _request_document_with_recovery splits only if the provider says
-            # the document is too large or returns incomplete IDs.
-            batches = [pending]
+            # Compact TSV documents keep label context together; an optional
+            # cap lets the UI report progress between documents instead of
+            # waiting on one very large completion. Recovery still splits a
+            # document if the provider says it is too large or incomplete.
+            if document_max_entries is None:
+                batches = [pending]
+            else:
+                batches = [
+                    pending[offset : offset + document_max_entries]
+                    for offset in range(0, len(pending), document_max_entries)
+                ]
         elif not strict_simplified_chinese:
             # Body requests use compact TSV documents while preserving each
             # event/database context.  The count cap keeps response shape

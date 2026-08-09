@@ -71,6 +71,18 @@ class PipelineService:
         self.progress = progress or (lambda *_args, **_kwargs: None)
         self.cancel_event = cancel_event or threading.Event()
 
+    @property
+    def cheat_label_memory_path(self) -> Path:
+        """Cache advanced-cheat labels separately from body translations.
+
+        A body translation cache can become very large.  The preflight label
+        preview must not deserialize that unrelated file before it makes its
+        first provider request.
+        """
+
+        self.state_root.mkdir(parents=True, exist_ok=True)
+        return self.state_root / "cheat-label-translation-memory.json"
+
     def inspect(self, source: str | Path) -> InspectionReport:
         self.progress("inspect", 0.1, "reading RPG Maker MV metadata")
         report = inspect_game(source)
@@ -236,9 +248,13 @@ class PipelineService:
         # callers, but setting them here makes the pipeline contract explicit.
         kwargs.setdefault("batch_size", CHEAT_LABEL_MAX_BATCH_SIZE)
         kwargs.setdefault("max_concurrency", CHEAT_LABEL_MAX_CONCURRENCY)
+        # Keep preview/build requests bounded.  A single document is still
+        # used by direct callers when they do not opt into this cap, while the
+        # UI path gets progress after each 96-label document.
+        kwargs.setdefault("document_max_entries", 96)
         report = TranslationService(self.progress, self.cancel_event).translate(
             stage.staged_www,
-            memory_path=self.state_root / "translation-memory.json",
+            memory_path=self.cheat_label_memory_path,
             entry_kinds={"system-variable", "system-switch"},
             force=True,
             **kwargs,
@@ -254,10 +270,12 @@ class PipelineService:
     ) -> tuple[dict[str, Any], TranslationReport | None]:
         """Translate cheat labels in a disposable System.json-only copy.
 
-        The source game remains read-only.  The normal translation memory is
-        shared with the later build, so final staging reuses validated labels
-        without another provider call.  Only variable IDs and labels are
-        returned to the frontend; no arbitrary source files are exposed.
+        The source game remains read-only.  A small label-only translation
+        memory is shared with the later build, so final staging reuses
+        validated labels without another provider call.  It is deliberately
+        separate from the potentially huge body translation cache.  Only
+        variable IDs and labels are returned to the frontend; no arbitrary
+        source files are exposed.
         """
 
         source_www = Path(report.www_root).resolve(strict=True)
@@ -275,6 +293,7 @@ class PipelineService:
         kwargs.pop("force", None)
         kwargs.setdefault("batch_size", CHEAT_LABEL_MAX_BATCH_SIZE)
         kwargs.setdefault("max_concurrency", CHEAT_LABEL_MAX_CONCURRENCY)
+        kwargs.setdefault("document_max_entries", 96)
         self.state_root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="cheat-catalog-", dir=self.state_root) as temporary:
             preview_www = Path(temporary) / "www"
@@ -284,7 +303,7 @@ class PipelineService:
             shutil.copy2(source_system, preview_system)
             translation = TranslationService(self.progress, self.cancel_event).translate(
                 preview_www,
-                memory_path=self.state_root / "translation-memory.json",
+                memory_path=self.cheat_label_memory_path,
                 entry_kinds={"system-variable", "system-switch"},
                 force=True,
                 **kwargs,

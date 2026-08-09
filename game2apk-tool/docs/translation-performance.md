@@ -27,6 +27,10 @@ source order, and successful results are reused from
 `.state/translation-memory.json` on later builds. Set these optional environment
 variables before starting the tool when needed:
 
+高级作弊标签使用独立的 `.state/cheat-label-translation-memory.json`，不会在预览
+时加载正文缓存。桌面 UI 预览按最多 96 个标签一个 TXT/TSV 文档分批，避免单个大请求
+长时间占用内存；正文仍使用下面的上下文批次策略。
+
 Source filtering happens before any request: pure Chinese blocks are skipped
 and preserved. A mixed block stays together for context, while Han runs are
 protected and restored unchanged; only its surrounding non-Chinese text may
