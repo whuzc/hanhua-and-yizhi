@@ -21,8 +21,8 @@
           </div>
         </div>
         <div class="topbar-actions">
-          <span id="health-pill" class="status-pill status-pending"><i></i>正在检查工具链</span>
-          <button class="icon-button" type="button" title="减少动效" data-action="toggle-motion" aria-label="减少动效">✦</button>
+          <span id="health-pill" class="status-pill status-pending"><i></i><span>正在连接本地后台</span></span>
+          <button id="motion-button" class="icon-button" type="button" title="减少动效" aria-label="减少动效">✦</button>
         </div>
       </header>
 
@@ -30,41 +30,61 @@
         <div>
           <p class="eyebrow">安全暂存 · 可选汉化 · 签名构建</p>
           <h2>把你的 MV 项目带到手机上。</h2>
-          <p class="hero-copy">本地完成检查、暂存、构建和静态验收。原游戏资源、存档、密钥与 APK 永远不会进入这个分享包。</p>
+          <p class="hero-copy">前端只连接本机 <code>127.0.0.1</code> 后台。选择目录、检查、构建、签名和静态验收都由同目录的无 UI 后台执行；源游戏目录保持只读。</p>
         </div>
         <div class="hero-orbit" aria-hidden="true"><span></span><span></span><span></span></div>
       </section>
 
       <div class="workspace-grid">
         <section class="panel glass-surface" data-section="project">
-          <div class="panel-heading"><span class="step-index">01</span><div><h3>项目来源</h3><p>选择已解包的 RPG Maker MV 项目或 www 目录。</p></div></div>
+          <div class="panel-heading"><span class="step-index">01</span><div><h3>项目来源</h3><p>选择已解包的 RPG Maker MV 游戏目录或 <code>www</code> 目录。</p></div></div>
           <label class="field-label" for="source-path">项目路径</label>
-          <div class="field-row"><input id="source-path" class="text-field" placeholder="例如：D:\\Games\\MyMVGame" autocomplete="off" /><button class="ghost-button" data-action="choose-source" type="button">选择目录</button></div>
-          <button id="inspect-button" class="primary-button" data-action="inspect" type="button"><span>检查项目</span><b>↗</b></button>
+          <div class="field-row"><input id="source-path" class="text-field" placeholder="例如：F:\Games\MyMVGame" autocomplete="off" /><button class="ghost-button" data-browse-kind="source" type="button">浏览目录</button></div>
+          <button id="inspect-button" class="primary-button" type="button"><span>检查项目</span><b>→</b></button>
         </section>
 
         <section class="panel glass-surface" data-section="toolchain">
-          <div class="panel-heading"><span class="step-index">00</span><div><h3>Android 工具链</h3><p>Release 不内置工具；自动发现后再让你确认下载。</p></div></div>
+          <div class="panel-heading"><span class="step-index">00</span><div><h3>Android 工具链</h3><p>Release 不内置 SDK/JDK；自动发现本机安装后直接调用。</p></div></div>
           <div id="toolchain-state" class="callout pending"><span class="callout-dot"></span><div><strong>正在读取本机配置</strong><small>ANDROID_SDK_ROOT · JAVA_HOME · PATH</small></div></div>
-          <div class="path-stack"><div class="path-item"><span>SDK</span><code id="sdk-path">未发现</code></div><div class="path-item"><span>JDK</span><code id="jdk-path">未发现</code></div><div class="path-item"><span>Gradle</span><code id="gradle-path">用户目录缓存</code></div></div>
-          <div class="button-row"><button class="ghost-button" data-action="configure" type="button">手动配置</button><button class="ghost-button" data-action="download" type="button">下载官方工具</button></div>
+          <div class="toolchain-form">
+            <label><span>SDK</span><div class="compact-field"><input id="sdk-path" class="text-field" autocomplete="off" /><button class="mini-button" data-browse-kind="sdk" type="button">浏览</button></div></label>
+            <label><span>JDK</span><div class="compact-field"><input id="jdk-path" class="text-field" autocomplete="off" /><button class="mini-button" data-browse-kind="jdk" type="button">浏览</button></div></label>
+            <label><span>Gradle 缓存</span><div class="compact-field"><input id="gradle-path" class="text-field" autocomplete="off" /><button class="mini-button" data-browse-kind="gradle" type="button">浏览</button></div></label>
+          </div>
+          <div class="button-row"><button id="save-toolchain" class="ghost-button" type="button">保存并重检</button><button id="refresh-toolchain" class="text-button" type="button">重新发现</button></div>
+          <div class="download-actions"><button id="download-android" class="mini-button" type="button">下载 Android 命令行工具</button><button id="download-jdk" class="mini-button" type="button">下载 JDK 17</button></div>
         </section>
 
         <section class="panel glass-surface" data-section="settings">
-          <div class="panel-heading"><span class="step-index">02</span><div><h3>应用与签名</h3><p>只在构建时使用，密码不会写入日志。</p></div></div>
-          <div class="form-grid"><label>应用名称<input class="text-field" value="RPG Maker MV" /></label><label>Application ID<input class="text-field" value="com.game2apk.app" /></label><label>版本<input class="text-field" value="1.0.0" /></label><label>Version code<input class="text-field" value="1" inputmode="numeric" /></label></div>
-          <label class="check-row"><input type="checkbox" /> <span>使用 DeepSeek 翻译（需要明确确认第三方传输）</span></label>
+          <div class="panel-heading"><span class="step-index">02</span><div><h3>应用与签名</h3><p>密钥与密码仅在当前本机构建请求中使用，绝不写入日志或设置文件。</p></div></div>
+          <div class="form-grid">
+            <label>应用名称<input id="app-name" class="text-field" value="RPG Maker MV" autocomplete="off" /></label>
+            <label>Application ID<input id="application-id" class="text-field" value="com.game2apk.app" autocomplete="off" autocapitalize="off" /></label>
+            <label>版本<input id="version-name" class="text-field" value="1.0.0" autocomplete="off" /></label>
+            <label>Version code<input id="version-code" class="text-field" value="1" inputmode="numeric" autocomplete="off" /></label>
+          </div>
+          <label class="field-label template-field" for="template-path">Android 模板（留空使用 Release 自带模板）</label>
+          <div class="field-row"><input id="template-path" class="text-field" placeholder="可选：自定义 android-rpgmv 模板目录" autocomplete="off" /><button class="ghost-button" data-browse-kind="template" type="button">浏览目录</button></div>
+          <label class="check-row"><input id="translate-toggle" type="checkbox" /> <span>使用 DeepSeek 翻译未汉化文本</span></label>
+          <div id="translation-options" class="secret-options" hidden>
+            <label class="check-row"><input id="translation-confirm" type="checkbox" /> <span>我确认会向第三方 DeepSeek 发送待翻译文本</span></label>
+            <label class="field-label" for="deepseek-key">DeepSeek Key（仅本次请求）</label>
+            <input id="deepseek-key" class="text-field" type="password" autocomplete="off" />
+          </div>
+          <label class="field-label secret-label" for="sign-password">签名密码（可选；仅本次请求）</label>
+          <input id="sign-password" class="text-field" type="password" autocomplete="off" />
         </section>
 
         <section class="panel report-panel glass-surface" data-section="report">
-          <div class="panel-heading"><span class="step-index">03</span><div><h3>检查报告</h3><p>动态状态会在这里逐步出现。</p></div><span id="report-state" class="mini-state">等待检查</span></div>
-          <div id="report-log" class="report-log"><div class="empty-state"><div class="empty-icon">⌁</div><p>选择项目后点击“检查项目”</p><small>前端壳只通过 localhost 与桌面进程通信</small></div></div>
-          <div class="progress-track"><span id="progress-fill"></span></div>
-          <button class="primary-button build-button" data-action="build" type="button" disabled><span>构建并验收</span><b>→</b></button>
+          <div class="panel-heading"><span class="step-index">03</span><div><h3>检查报告 / 构建日志</h3><p>阶段、百分比和结果会实时显示；取消会请求后台安全停止当前任务。</p></div><span id="report-state" class="mini-state">等待操作</span></div>
+          <div id="report-log" class="report-log" role="log" aria-live="polite"><div class="empty-state"><div class="empty-icon">◌</div><p>选择项目后点击“检查项目”</p><small>检查通过后才能开始构建与签名。</small></div></div>
+          <div class="progress-meta"><span id="progress-label">尚未开始</span><span id="progress-value">0%</span></div>
+          <div class="progress-track" aria-label="任务进度"><span id="progress-fill"></span></div>
+          <div class="build-actions"><button id="build-button" class="primary-button build-button" type="button" disabled><span>构建并验证</span><b>→</b></button><button id="cancel-button" class="danger-button" type="button" disabled>取消任务</button></div>
         </section>
       </div>
 
-      <footer class="footer"><span>本地优先 · 不上传 APK</span><span>v1.2 desktop shell</span></footer>
+      <footer class="footer"><span>本地优先 · 不上传 APK · 原项目只读</span><span>browser UI + local backend</span></footer>
     </main>
     <script src="./app.js" defer></script>
   </body>

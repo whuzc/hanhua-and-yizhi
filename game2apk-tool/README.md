@@ -4,7 +4,7 @@
 
 Windows 本地工具：检查 RPG Maker MV、在受标记的 `.work` 副本中暂存和补丁、可选离线翻译、Gradle 构建、稳定签名并做 APK 静态验收。原游戏目录只读；本项目不生成 AAB。
 
-Windows portable 版默认打开完整的 Tk 桌面向导；它使用独立的玻璃/液态视觉层：动态光斑、圆角卡片、DWM 背景和按压反馈见 `docs/desktop-ui.md`。另有 `game2apk-tool.exe --web` 可选打开 StarRail Calc 风格的玻璃前端预览（完整构建仍由默认 GUI 执行），说明见 `docs/desktop-frontend.md`。动画可用 `GAME2APK_REDUCE_MOTION=1` 关闭。
+Windows portable 版采用“浏览器前端 + 本机无 UI 后台”架构：双击 `game2apk-ui.exe` 打开完整的 StarRail Calc 风格玻璃界面；同目录 `game2apk-tool.exe` 只负责本机后台和命令行，不再作为默认可见界面。前端可原生浏览目录、保存工具链路径、检查项目、构建/签名/静态验收，并实时显示阶段、百分比、日志、错误与取消状态。运行边界与接口安全说明见 `docs/desktop-frontend.md`。
 
 ## 快速开始
 
@@ -70,15 +70,34 @@ portable 不得包含原游戏、存档、APK、AAB、keystore、DPAPI 文件或
 
 ## Windows portable
 
-Release 包不内置 AndroidDev/SDK/JDK/Gradle 缓存，体积更小且不会夹带第三方工具授权。解压到用户有写入权限的目录后双击 `game2apk-tool.exe`，默认打开完整 Tk 向导：选择项目目录 → 检查 → 配置/发现工具链 → 填写应用与签名 → 构建并验收。工具链路径只保存到当前用户 `%APPDATA%\\game2apk-tool\\toolchain.json`，不会写回仓库。
-
-如只想体验 StarRail Calc 风格的毛玻璃视觉壳，可运行：
+Release 包不内置 AndroidDev/SDK/JDK/Gradle 缓存，体积更小且不会夹带第三方工具授权。解压到用户有写入权限的目录后，按下面方式使用：
 
 ```powershell
-.\game2apk-tool.exe --web
+cd .\game2apk-tool
+.\game2apk-ui.exe
 ```
 
-`--web` 仅绑定 `127.0.0.1`，提供静态前端、只读工具链健康检查和明确的桌面 GUI fallback；浏览器不能安全地读取本地游戏目录或持有签名密码，因此完整构建仍从默认 GUI 执行。设置 `GAME2APK_REDUCE_MOTION=1` 可关闭 Tk 液态背景；浏览器前端响应 `prefers-reduced-motion`。
+`game2apk-ui.exe` 会隐藏启动同目录的 `game2apk-tool.exe --backend --port 0`，从后台读取一个随机 loopback 地址后打开默认浏览器。不要直接双击 `game2apk-tool.exe`；它是无 UI 后台/CLI，供前端和脚本调用。工具链路径只保存到当前用户 `%APPDATA%\\game2apk-tool\\toolchain.json`，不会写回仓库。
+
+浏览器前端的标准流程为：选择游戏目录 → 点击“检查项目” → 填写应用信息与可选翻译/签名密码 → 必要时保存 SDK/JDK/Gradle 路径，或点击“下载 Android 命令行工具/下载 JDK 17”并选择安装目录、确认官方 HTTPS 下载 → 点击“构建并验证”。检查通过前构建按钮不会启用；任务开始后页面每 500 ms 读取状态，并显示阶段、百分比、实时日志、结果或脱敏错误。点击“取消任务”会请求后台安全停止当前阶段。
+
+每次启动都只监听 `127.0.0.1` 的随机端口，HTML 页面由同一个本机后台提供；写操作要求 HttpOnly 同源会话 Cookie 与 `X-Game2Apk-Request` 请求头。DeepSeek Key 与签名密码仅存在于当前构建请求内，后台不会写入日志、设置文件、APK 或 portable。页面每 5 秒发送心跳；关闭标签页后后台约 30 秒内回收，关闭启动器时也会由父进程监视器回收。浏览器前端响应系统的 `prefers-reduced-motion`；旧 Tk 兼容界面才使用 `GAME2APK_REDUCE_MOTION=1`。
+
+兼容入口：
+
+```powershell
+# 直接打开完整浏览器前端（建议仍使用 game2apk-ui.exe，以便自动回收后台）
+.\game2apk-tool.exe --web
+
+# 后台服务，供调试或其他本机前端连接；不会打开窗口
+.\game2apk-tool.exe --backend --port 0
+
+# 原有脚本式命令行
+.\game2apk-tool.exe --cli --help
+
+# 仅用于排障的旧 Tk 界面
+.\game2apk-tool.exe --legacy-gui
+```
 
 ## 从源码运行
 
@@ -88,10 +107,10 @@ Release 包不内置 AndroidDev/SDK/JDK/Gradle 缓存，体积更小且不会夹
 $env:PYTHONPATH = (Resolve-Path .\game2apk-tool\src).Path
 python .\game2apk-tool\scripts\game2apk.py --help
 python .\game2apk-tool\tests\run_tests.py
-python .\game2apk-tool\src\game2apk\portable_entry.py --web
+python -m game2apk.ui_launcher
 ```
 
-如需打开源码 GUI，可运行 `python .\\game2apk-tool\\scripts\\game2apk.py gui`。构建 portable 需要 PyInstaller：
+如需直接调试本机后台，可运行 `python -m game2apk.portable_entry --backend --port 0`；如需旧 Tk 排障界面，可运行 `python -m game2apk.portable_entry --legacy-gui`。构建 portable 需要 PyInstaller：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\game2apk-tool\scripts\build-portable.ps1
@@ -99,7 +118,7 @@ powershell -ExecutionPolicy Bypass -File .\game2apk-tool\scripts\build-portable.
 
 ## 首次配置 Android 工具链
 
-1. 启动 GUI，等待“Android 工具链”卡片完成本地扫描。已有 Android Studio/SDK/JDK 时优先点击保存并重检，确认 SDK、JDK 和 Gradle 用户目录。
+1. 启动 `game2apk-ui.exe`，等待“Android 工具链”卡片完成本地扫描。已有 Android Studio/SDK/JDK 时可直接填写路径或点“浏览”，再点“保存并重检”。
 2. 如果缺少 SDK/JDK，点击对应的官方工具下载按钮，选择安装位置并阅读确认框。下载仅允许官方 HTTPS host，失败时可以改为手动选择已下载目录。
 3. Command-line Tools 只提供 `sdkmanager`，按模板的 `compileSdk`/`buildToolsVersion` 安装 platform 和 build-tools；需要手机调试时再安装 platform-tools。接受许可证和安装组件的动作由用户执行。
 4. Gradle wrapper 首次构建会把可再生缓存写入用户 Gradle 目录，不会写入 portable 或 Git 仓库。
@@ -117,7 +136,7 @@ python .\game2apk-tool\scripts\game2apk.py run ".\我的MV项目" `
   --sign-password-prompt
 ```
 
-GUI 构建完成后会显示 APK 路径、SHA-256、签名候选和静态报告。安装到已连接设备前确认包名/证书与现有版本一致：
+浏览器前端构建完成后会显示 APK 路径、SHA-256、签名候选和静态报告。安装到已连接设备前确认包名/证书与现有版本一致：
 
 ```powershell
 adb devices

@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 $toolRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $srcRoot = Join-Path $toolRoot 'src'
 $spec = Join-Path $toolRoot 'scripts\game2apk.spec'
+$uiSpec = Join-Path $toolRoot 'scripts\game2apk-ui.spec'
 $portableRoot = Join-Path $toolRoot 'dist\portable'
 $env:PYTHONPATH = $srcRoot
 
@@ -20,6 +21,18 @@ New-Item -ItemType Directory -Path $portableRoot -Force | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
 
 $portableAppRoot = (Resolve-Path (Join-Path $portableRoot 'game2apk-tool')).Path
+
+# The visible application is a browser frontend.  Keep its one-file launcher
+# beside the headless/CLI backend so the launcher can always find its exact
+# sibling executable without adding the release folder to PATH.
+$uiDist = Join-Path $toolRoot '.work\pyinstaller-ui-dist'
+$uiWork = Join-Path $toolRoot '.work\pyinstaller-ui'
+& $python -m PyInstaller --noconfirm --clean --distpath $uiDist --workpath $uiWork $uiSpec
+if ($LASTEXITCODE -ne 0) { throw "UI launcher PyInstaller failed with exit code $LASTEXITCODE" }
+$uiExecutable = Join-Path $uiDist 'game2apk-ui.exe'
+if (-not (Test-Path -LiteralPath $uiExecutable -PathType Leaf)) { throw "UI launcher output is missing: $uiExecutable" }
+Copy-Item -LiteralPath $uiExecutable -Destination (Join-Path $portableAppRoot 'game2apk-ui.exe') -Force
+
 $templateSource = Join-Path $toolRoot 'templates\android-rpgmv'
 $templateTarget = Join-Path $portableAppRoot 'templates\android-rpgmv'
 if (-not (Test-Path -LiteralPath $templateSource -PathType Container)) { throw "clean Android template is missing: $templateSource" }

@@ -56,7 +56,11 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=False,
+    # The backend deliberately remains a console executable: its --cli mode
+    # is supported for automation and game2apk-ui.exe consumes its structured
+    # --backend readiness line through stdout.  The UI launcher starts it with
+    # CREATE_NO_WINDOW, so normal users never see a background terminal.
+    console=True,
 )
 coll = COLLECT(
     exe,

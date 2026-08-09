@@ -131,13 +131,18 @@ class SecurityAndInputContractTests(unittest.TestCase):
         for token in ("Game2ApkCheat", "999999999", "recallMapIds = [136, 97]", "2010", "2034", "2085"):
             self.assertIn(token, bridge)
 
-    def test_desktop_release_defaults_to_gui_and_excludes_console(self) -> None:
+    def test_desktop_release_separates_console_backend_from_browser_launcher(self) -> None:
         root = Path(__file__).resolve().parents[1]
         entry = (root / "src" / "game2apk" / "portable_entry.py").read_text(encoding="utf-8")
         spec = (root / "scripts" / "game2apk.spec").read_text(encoding="utf-8")
-        self.assertIn("gui_main", entry)
+        launcher = (root / "src" / "game2apk" / "ui_launcher.py").read_text(encoding="utf-8")
+        ui_spec = (root / "scripts" / "game2apk-ui.spec").read_text(encoding="utf-8")
+        self.assertIn('"--backend"', entry)
         self.assertIn('"--cli"', entry)
-        self.assertIn("console=False", spec)
+        self.assertIn("console=True", spec)
+        self.assertIn("game2apk-tool.exe", launcher)
+        self.assertIn("CREATE_NO_WINDOW", launcher)
+        self.assertIn("console=False", ui_spec)
 
     def test_desktop_ui_has_glass_liquid_motion_and_reduced_motion_switch(self) -> None:
         root = Path(__file__).resolve().parents[1]
