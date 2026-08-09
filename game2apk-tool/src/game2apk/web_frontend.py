@@ -518,6 +518,8 @@ def health_payload(tool_root: str | Path) -> dict[str, Any]:
             "sdk_dir": info.sdk_dir or "",
             "jdk_dir": info.jdk_dir or "",
             "gradle_user_home": info.gradle_user_home or "",
+            "gradle_user_home_scope": "shared",
+            "gradle_user_home_policy": "keep",
             "wrapper": info.wrapper or "",
             "server": "loopback",
         }
@@ -528,6 +530,8 @@ def health_payload(tool_root: str | Path) -> dict[str, Any]:
             "sdk_dir": "",
             "jdk_dir": "",
             "gradle_user_home": "",
+            "gradle_user_home_scope": "shared",
+            "gradle_user_home_policy": "keep",
             "server": "loopback",
             "error": redact_text(str(exc)),
         }

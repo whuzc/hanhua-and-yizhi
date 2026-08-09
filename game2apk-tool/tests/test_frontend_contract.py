@@ -141,6 +141,10 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("downloadToolchain", js)
         self.assertIn('id="translation-thinking"', html)
         self.assertIn('id="translation-effort"', html)
+        self.assertIn('id="gradle-cache-hint"', html)
+        self.assertIn('data-cache-scope="shared"', html)
+        self.assertIn("gradle_user_home_scope", js)
+        self.assertIn("构建完成后不自动删除", html + js)
         self.assertIn("thinking_enabled: thinkingMode.value === \"enabled\"", js)
         self.assertIn("reasoning_effort: reasoningEffort.value", js)
         self.assertIn("reasoningEffort.disabled = !enabled", js)
@@ -170,6 +174,16 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("report.scrollTop = Math.max(0, previousScrollTop - removedHeight);", js)
         self.assertIn("自动跟随最新进度", js)
         self.assertIn("已暂停自动滚动", js)
+
+    def test_health_declares_gradle_user_home_as_shared(self) -> None:
+        import sys
+
+        sys.path.insert(0, str(ROOT / "src"))
+        from game2apk.web_frontend import health_payload
+
+        payload = health_payload(ROOT)
+        self.assertEqual(payload["gradle_user_home_scope"], "shared")
+        self.assertEqual(payload["gradle_user_home_policy"], "keep")
 
     def test_launcher_rejects_non_loopback_ready_urls(self) -> None:
         import sys

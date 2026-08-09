@@ -159,10 +159,22 @@
     toolchainState.className = `callout ${ready ? "ready" : "pending"}`;
     setText(toolchainState.querySelector("strong"), ready ? "检测到完整 Android 工具链" : "未检测到完整 Android 工具链");
     const missing = Array.isArray(payload?.missing) ? payload.missing : [];
-    setText(toolchainState.querySelector("small"), ready ? "将直接调用本机安装；不会重复下载" : (missing.length ? `缺少：${missing.join("、")}` : "可手动选择 SDK、JDK 和 Gradle 缓存目录"));
+    setText(toolchainState.querySelector("small"), ready ? "将直接调用本机安装；不会重复下载" : (missing.length ? `缺少：${missing.join("、")}` : "可手动选择 SDK、JDK 和 Gradle 用户缓存目录"));
     $("#sdk-path").value = readablePath(payload?.sdk_dir, "");
     $("#jdk-path").value = readablePath(payload?.jdk_dir, "");
     $("#gradle-path").value = readablePath(payload?.gradle_user_home, "");
+    const cacheHint = $("#gradle-cache-hint");
+    if (cacheHint) {
+      const shared = payload?.gradle_user_home_scope !== "project";
+      cacheHint.dataset.cacheScope = shared ? "shared" : "project";
+      setText(cacheHint.querySelector("strong"), shared ? "通用缓存 · 多项目共用" : "项目缓存 · 仅本次构建");
+      setText(
+        cacheHint.querySelector("span"),
+        shared
+          ? "构建完成后不自动删除；Gradle 会复用依赖，后续游戏可避免重复下载。"
+          : "构建完成后可安全清理；这是项目临时缓存，不影响其他游戏。",
+      );
+    }
   };
 
   const refreshToolchain = async (announce = false) => {

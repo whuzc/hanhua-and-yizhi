@@ -49,7 +49,11 @@
           <div class="toolchain-form">
             <label><span>SDK</span><div class="compact-field"><input id="sdk-path" class="text-field" autocomplete="off" /><button class="mini-button" data-browse-kind="sdk" type="button">浏览</button></div></label>
             <label><span>JDK</span><div class="compact-field"><input id="jdk-path" class="text-field" autocomplete="off" /><button class="mini-button" data-browse-kind="jdk" type="button">浏览</button></div></label>
-            <label><span>Gradle 缓存</span><div class="compact-field"><input id="gradle-path" class="text-field" autocomplete="off" /><button class="mini-button" data-browse-kind="gradle" type="button">浏览</button></div></label>
+            <label><span>Gradle 用户缓存</span><div class="compact-field"><input id="gradle-path" class="text-field" autocomplete="off" /><button class="mini-button" data-browse-kind="gradle" type="button">浏览</button></div></label>
+          </div>
+          <div id="gradle-cache-hint" class="cache-hint" data-cache-scope="shared">
+            <strong>通用缓存 · 多项目共用</strong>
+            <span>构建完成后不自动删除；Gradle 会复用依赖，后续游戏可避免重复下载。</span>
           </div>
           <div class="button-row"><button id="save-toolchain" class="ghost-button" type="button">保存并重检</button><button id="refresh-toolchain" class="text-button" type="button">重新发现</button></div>
           <div class="download-actions"><button id="download-android" class="mini-button" type="button">下载 Android 命令行工具</button><button id="download-jdk" class="mini-button" type="button">下载 JDK 17</button></div>

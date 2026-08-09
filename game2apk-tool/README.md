@@ -125,6 +125,8 @@ powershell -ExecutionPolicy Bypass -File .\game2apk-tool\scripts\build-portable.
 3. Command-line Tools 只提供 `sdkmanager`，按模板的 `compileSdk`/`buildToolsVersion` 安装 platform 和 build-tools；需要手机调试时再安装 platform-tools。接受许可证和安装组件的动作由用户执行。
 4. Gradle wrapper 首次构建会把可再生缓存写入用户 Gradle 目录，不会写入 portable 或 Git 仓库。
 
+这里的 Gradle 用户目录是跨项目共用的 `GRADLE_USER_HOME`，不是某个游戏专属缓存。构建完成后工具不会自动删除它：保留依赖和 wrapper 分发包可以让后续游戏更快、也能减少离线构建失败。只有磁盘紧张或缓存损坏时，关闭构建进程后再手动清理；下一次构建可能重新下载依赖。项目级 `.work` 暂存产物与它不同，属于可再生的构建审计数据；确认不再需要报告和日志后可单独清理，但不要把 `.state`、存档、原游戏目录当作缓存删除。
+
 ## 构建、签名与安装 APK
 
 命令行可先检查项目，再执行完整 run（Key/密码只使用安全来源）：
