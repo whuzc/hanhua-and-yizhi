@@ -19,6 +19,14 @@
   const translationConfirm = $("#translation-confirm");
   const translationOptions = $("#translation-options");
   const translationDetection = $("#translation-detection");
+  const cheatVariableState = $("#cheat-variable-state");
+  const cheatVariableCallout = $("#cheat-variable-callout");
+  const cheatVariableList = $("#cheat-variable-list");
+  const cheatVariableSummary = $("#cheat-variable-summary");
+  const cheatVariableSearch = $("#cheat-variable-search");
+  const prepareCheatVariablesButton = $("#prepare-cheat-variables");
+  const selectAllCheatVariablesButton = $("#select-all-cheat-variables");
+  const clearCheatVariablesButton = $("#clear-cheat-variables");
   const downloadButtons = [$("#download-android"), $("#download-jdk")];
   const root = document.documentElement;
 
@@ -37,6 +45,11 @@
   let heartbeatTimer = null;
   let inspected = false;
   let cheatLabelsNeedTranslation = false;
+  let cheatCatalogKnown = false;
+  let cheatCatalogStatus = "idle";
+  let cheatCatalogStatusBeforeJob = "idle";
+  let cheatVariableItems = [];
+  let selectedCheatVariableIds = new Set();
   let lastJobMessage = "";
   let reportStickToBottom = true;
   let pollFailureCount = 0;
@@ -95,9 +108,13 @@
 
   const setTaskButtons = (running) => {
     inspectButton.disabled = running;
-    buildButton.disabled = running || !inspected;
+    const cheatCatalogPending = cheatCatalogKnown
+      && cheatCatalogStatus !== "ready"
+      && cheatCatalogStatus !== "unavailable";
+    buildButton.disabled = running || !inspected || cheatCatalogPending;
     cancelButton.disabled = !running;
     downloadButtons.forEach((button) => { button.disabled = running; });
+    updateCheatVariableControls(running);
   };
 
   const resetTranslationChoice = (available) => {
@@ -142,6 +159,197 @@
         : `\u7ffb\u8bd1\u662f\u53ef\u9009\u529f\u80fd，${candidateText}；${cheatText}；\u4e2d\u6587\u5757\u4f1a\u4fdd\u6301\u539f\u6587。`,
     );
     resetTranslationChoice(true);
+  };
+
+  const normalizeCheatVariable = (value) => {
+    if (!value || typeof value !== "object") return null;
+    const kind = String(value.kind || "variable").toLowerCase();
+    if (kind !== "variable") return null;
+    const index = Number(value.index);
+    if (!Number.isSafeInteger(index) || index < 1) return null;
+    const id = typeof value.id === "string" && value.id.trim()
+      ? value.id.trim()
+      : `variable:${index}`;
+    const sourceLabel = String(value.sourceLabel ?? value.source_label ?? "").trim() || `变量 ${index}`;
+    const translatedLabel = String(value.translatedLabel ?? value.translated_label ?? "").trim();
+    const displayLabel = String(value.displayLabel ?? value.display_label ?? translatedLabel ?? "").trim()
+      || translatedLabel
+      || sourceLabel;
+    return { id, kind: "variable", index, sourceLabel, translatedLabel, displayLabel };
+  };
+
+  const setCheatVariableCallout = (state, title, detail) => {
+    cheatVariableCallout.className = `callout ${state === "ready" ? "ready" : "pending"}`;
+    cheatVariableCallout.dataset.state = state;
+    setText(cheatVariableCallout.querySelector("strong"), title);
+    setText(cheatVariableCallout.querySelector("small"), detail);
+  };
+
+  const updateCheatVariableSummary = (visibleCount = null) => {
+    const selectedCount = cheatVariableItems.reduce(
+      (count, item) => count + (selectedCheatVariableIds.has(item.id) ? 1 : 0),
+      0,
+    );
+    const shown = visibleCount == null ? cheatVariableItems.length : visibleCount;
+    setText(cheatVariableSummary.querySelector("strong"), `已选 ${selectedCount} / ${cheatVariableItems.length}`);
+    setText(
+      cheatVariableSummary.querySelector("span"),
+      cheatCatalogStatus === "ready"
+        ? `${shown === cheatVariableItems.length ? "显示全部" : `当前显示 ${shown} 项`}；构建时仅发送稳定变量编号。`
+        : "翻译完成后才可选择；原文仅用于辅助核对。",
+    );
+  };
+
+  const renderCheatVariableList = () => {
+    cheatVariableList.dataset.state = cheatCatalogStatus;
+    const query = cheatVariableSearch.value.trim().toLocaleLowerCase("zh-CN");
+    const visibleItems = cheatVariableItems.filter((item) => {
+      if (!query) return true;
+      return `${item.index}\n${item.id}\n${item.displayLabel}\n${item.translatedLabel}\n${item.sourceLabel}`
+        .toLocaleLowerCase("zh-CN")
+        .includes(query);
+    });
+    const fragment = document.createDocumentFragment();
+    if (!visibleItems.length) {
+      const empty = document.createElement("div");
+      empty.className = "cheat-variable-empty";
+      const mark = document.createElement("span");
+      mark.setAttribute("aria-hidden", "true");
+      setText(mark, query ? "⌕" : "◇");
+      const title = document.createElement("p");
+      setText(title, query ? "没有匹配的变量" : "没有发现可加入的高级数值变量");
+      const detail = document.createElement("small");
+      setText(detail, query ? "换一个译名、原文或编号试试。" : "当前项目无需配置高级数值列表。");
+      empty.append(mark, title, detail);
+      fragment.append(empty);
+    } else {
+      visibleItems.forEach((item) => {
+        const row = document.createElement("label");
+        row.className = "cheat-variable-item";
+        row.dataset.variableId = item.id;
+        row.dataset.selected = String(selectedCheatVariableIds.has(item.id));
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = selectedCheatVariableIds.has(item.id);
+        checkbox.disabled = cheatCatalogStatus !== "ready" || Boolean(currentJobId);
+        checkbox.setAttribute("aria-label", `将${item.displayLabel}加入高级作弊菜单`);
+        checkbox.addEventListener("change", () => {
+          if (checkbox.checked) selectedCheatVariableIds.add(item.id);
+          else selectedCheatVariableIds.delete(item.id);
+          row.dataset.selected = String(checkbox.checked);
+          updateCheatVariableSummary(visibleItems.length);
+        });
+        const copy = document.createElement("span");
+        copy.className = "cheat-variable-copy";
+        const name = document.createElement("strong");
+        setText(name, item.displayLabel);
+        name.title = item.displayLabel;
+        const number = document.createElement("code");
+        setText(number, `变量 #${item.index} · ${item.id}`);
+        const source = document.createElement("small");
+        const showSource = item.sourceLabel !== item.displayLabel;
+        source.hidden = !showSource;
+        setText(source, showSource ? `原文：${item.sourceLabel}` : "");
+        if (showSource) source.title = item.sourceLabel;
+        copy.append(name, number, source);
+        row.append(checkbox, copy);
+        fragment.append(row);
+      });
+    }
+    cheatVariableList.replaceChildren(fragment);
+    updateCheatVariableSummary(visibleItems.length);
+  };
+
+  const updateCheatVariableControls = (running = Boolean(currentJobId)) => {
+    const hasItems = cheatVariableItems.length > 0;
+    const ready = cheatCatalogStatus === "ready";
+    prepareCheatVariablesButton.disabled = running
+      || !inspected
+      || !cheatCatalogKnown
+      || cheatCatalogStatus === "unavailable";
+    setText(
+      prepareCheatVariablesButton,
+      cheatCatalogStatus === "translating"
+        ? "正在翻译标签…"
+        : (ready ? "重新翻译标签" : "翻译并载入变量"),
+    );
+    cheatVariableSearch.disabled = running || !ready || !hasItems;
+    selectAllCheatVariablesButton.disabled = running || !ready || !hasItems;
+    clearCheatVariablesButton.disabled = running || !ready || !hasItems;
+    cheatVariableList.querySelectorAll('input[type="checkbox"]').forEach((checkbox) => {
+      checkbox.disabled = running || !ready;
+    });
+  };
+
+  const resetCheatCatalog = () => {
+    cheatCatalogKnown = false;
+    cheatCatalogStatus = "idle";
+    cheatCatalogStatusBeforeJob = "idle";
+    cheatVariableItems = [];
+    selectedCheatVariableIds = new Set();
+    cheatVariableSearch.value = "";
+    setText(cheatVariableState, "等待检查");
+    setCheatVariableCallout("idle", "尚未载入变量", "先检查项目，再翻译并载入高级作弊标签；选择始终按变量编号保存。");
+    renderCheatVariableList();
+    updateCheatVariableControls();
+  };
+
+  const restoreCheatCatalogAfterJob = (detail) => {
+    cheatCatalogStatus = cheatCatalogStatusBeforeJob === "ready" ? "ready" : "discovered";
+    cheatCatalogStatusBeforeJob = cheatCatalogStatus;
+    setText(cheatVariableState, cheatCatalogStatus === "ready" ? "可选择" : "待翻译");
+    setCheatVariableCallout(
+      cheatCatalogStatus,
+      cheatCatalogStatus === "ready" ? "保留上一次已翻译标签" : "作弊标签尚未完成翻译",
+      detail,
+    );
+    renderCheatVariableList();
+  };
+
+  const renderCheatCatalog = (catalog, { preserveSelection = true } = {}) => {
+    if (!catalog || typeof catalog !== "object") {
+      resetCheatCatalog();
+      return;
+    }
+    cheatCatalogKnown = true;
+    const rawItems = Array.isArray(catalog.items) ? catalog.items : [];
+    const seen = new Set();
+    const nextItems = rawItems
+      .map(normalizeCheatVariable)
+      .filter((item) => item && !seen.has(item.id) && seen.add(item.id))
+      .sort((left, right) => left.index - right.index);
+    const nextIds = new Set(nextItems.map((item) => item.id));
+    selectedCheatVariableIds = preserveSelection
+      ? new Set([...selectedCheatVariableIds].filter((id) => nextIds.has(id)))
+      : new Set(nextIds);
+    cheatVariableItems = nextItems;
+    cheatCatalogStatus = catalog.status === "ready"
+      ? "ready"
+      : (catalog.status === "unavailable" ? "unavailable" : "discovered");
+    cheatVariableSearch.value = "";
+    if (cheatCatalogStatus === "ready") {
+      const translatedCount = nextItems.filter((item) => item.translatedLabel).length;
+      setText(cheatVariableState, "可选择");
+      setCheatVariableCallout(
+        "ready",
+        `已准备 ${nextItems.length} 个高级数值变量`,
+        `其中 ${translatedCount} 个使用翻译名称；默认全部加入，可按需取消或点击“清空”。`,
+      );
+    } else if (cheatCatalogStatus === "unavailable" || !nextItems.length) {
+      cheatCatalogStatus = "unavailable";
+      setText(cheatVariableState, "无需配置");
+      setCheatVariableCallout("unavailable", "没有可选择的高级数值变量", "构建可继续，游戏内不会显示高级数值变量列表。");
+    } else {
+      setText(cheatVariableState, "待翻译");
+      setCheatVariableCallout(
+        "discovered",
+        `发现 ${nextItems.length} 个候选变量`,
+        "当前显示游戏原始名称；点击“翻译并载入变量”后会换成简体中文名称并开放选择。",
+      );
+    }
+    cheatCatalogStatusBeforeJob = cheatCatalogStatus;
+    renderCheatVariableList();
+    updateCheatVariableControls();
   };
 
   const isReportNearBottom = () => (
@@ -280,6 +488,8 @@
         field.value = payload.path;
         if (kind === "source") {
           inspected = false;
+          resetTranslationChoice(false);
+          resetCheatCatalog();
           if (!currentJobId) buildButton.disabled = true;
         }
         log("已选择目录", payload.path, "success");
@@ -338,6 +548,10 @@
     throw new Error("后台没有返回任务编号");
   };
 
+  const isCheatCatalogJob = (value) => String(value || "")
+    .replace(/[^a-z]/gi, "")
+    .toLowerCase() === "cheatcatalog";
+
   const jsonPreview = (value) => {
     if (!value || typeof value !== "object") return value == null ? "" : String(value);
     const scrubbed = JSON.parse(JSON.stringify(value, (key, item) => (/password|secret|token|key/i.test(key) ? "[已隐藏]" : item)));
@@ -346,6 +560,7 @@
 
   const finishJob = (job) => {
     const status = job.status;
+    const jobKind = job.kind || currentJobKind;
     currentJobId = null;
     currentJobKind = null;
     pollFailureCount = 0;
@@ -353,16 +568,26 @@
     if (status === "completed") {
       const result = job.result || {};
       let completionLabel = "任务完成";
-      if (job.kind === "inspect") {
+      if (jobKind === "inspect") {
         const inspection = result.inspection || result;
         inspected = typeof result.buildReady === "boolean" ? result.buildReady : inspection?.status !== "blocked";
         renderTranslationDetection(result.translation);
+        renderCheatCatalog(result.cheatCatalog, { preserveSelection: false });
         log(inspected ? "检查通过" : "检查被阻止", jsonPreview(inspection), inspected ? "success" : "error");
         completionLabel = inspected ? "检查通过" : "检查失败";
-      } else if (job.kind === "download") {
+      } else if (jobKind === "download") {
         if (result.health) renderToolchain(result.health);
         log("工具下载并解压完成", jsonPreview(result), "success");
         completionLabel = "工具链已更新";
+      } else if (isCheatCatalogJob(jobKind)) {
+        renderCheatCatalog(result.cheatCatalog || result.catalog || result);
+        const ready = cheatCatalogStatus === "ready" || cheatCatalogStatus === "unavailable";
+        completionLabel = ready ? "作弊变量已准备" : "作弊变量准备未完成";
+        log(
+          ready ? "高级作弊变量已准备" : "高级作弊变量准备未完成",
+          ready ? `可选择 ${cheatVariableItems.length} 个高级数值变量。` : jsonPreview(result),
+          ready ? "success" : "warn",
+        );
       } else {
         const verification = result.verification || {};
         const verificationPassed = result.verificationPassed === true
@@ -379,9 +604,11 @@
       setProgress(1, completionLabel);
       setText(reportState, completionLabel);
     } else if (status === "cancelled") {
+      if (isCheatCatalogJob(jobKind)) restoreCheatCatalogAfterJob("任务已取消；已保留现有变量编号与名称，可重新翻译。");
       setProgress(Number(job.fraction) || 0, "任务已取消");
       log("任务已取消", job.message || "后台已安全停止当前工作。", "warn");
     } else {
+      if (isCheatCatalogJob(jobKind)) restoreCheatCatalogAfterJob("翻译失败；已保留现有变量编号与名称，可检查日志后重试。");
       setProgress(Number(job.fraction) || 0, "任务失败");
       log("任务失败", job.error || job.message || "后台没有提供更多错误信息。", "error");
     }
@@ -389,6 +616,12 @@
   };
 
   const renderJob = (job) => {
+    if (isCheatCatalogJob(job.kind || currentJobKind) && cheatCatalogStatus !== "translating") {
+      cheatCatalogStatus = "translating";
+      setText(cheatVariableState, "翻译中");
+      setCheatVariableCallout("translating", "正在翻译高级作弊标签", "变量编号保持不变；完成后列表会原位更新为简体中文名称。");
+      updateCheatVariableControls(true);
+    }
     const fraction = Number(job.fraction);
     setProgress(Number.isFinite(fraction) ? fraction : 0, job.message || job.stage || "正在处理");
     const detail = `${job.stage || "任务"} · ${job.message || "正在处理"}`;
@@ -438,10 +671,15 @@
       currentJobId = jobId;
       currentJobKind = kind;
       pollFailureCount = 0;
-      const title = kind === "inspect" ? "已提交检查" : (kind === "download" ? "已提交工具下载" : "已提交构建");
+      const title = kind === "inspect"
+        ? "已提交检查"
+        : (kind === "download"
+          ? "已提交工具下载"
+          : (isCheatCatalogJob(kind) ? "已提交作弊标签翻译" : "已提交构建"));
       log(title, `任务编号：${jobId}`, "info");
       void pollJob(jobId);
     } catch (error) {
+      if (isCheatCatalogJob(kind)) restoreCheatCatalogAfterJob("无法提交翻译任务；已保留现有变量编号与名称。");
       setTaskButtons(false);
       log("无法提交任务", error instanceof Error ? error.message : "请检查输入后重试。", "error");
     }
@@ -452,12 +690,44 @@
     if (!source) { log("需要项目路径", "请先点击“浏览目录”选择游戏根目录或 www 目录。", "warn"); return; }
     inspected = false;
     resetTranslationChoice(false);
+    resetCheatCatalog();
     buildButton.disabled = true;
     void startJob("/api/inspect", { source }, "inspect");
   };
 
+  const prepareCheatVariables = () => {
+    if (!inspected) { log("需要先通过检查", "检查完成后才能读取该项目的高级数值变量。", "warn"); return; }
+    if (!cheatCatalogKnown || cheatCatalogStatus === "unavailable") {
+      log("没有可准备的高级数值变量", "当前项目没有返回可选择的变量目录。", "info");
+      return;
+    }
+    if (!translationConfirm.checked) {
+      log("需要翻译确认", "请先确认允许向 DeepSeek 发送高级作弊变量名称。", "warn");
+      return;
+    }
+    const source = $("#source-path").value.trim();
+    const payload = {
+      source,
+      confirm: true,
+      thinkingEnabled: thinkingMode.value === "enabled",
+      reasoningEffort: reasoningEffort.value,
+    };
+    const deepseekKey = $("#deepseek-key").value;
+    if (deepseekKey) payload.apiKey = deepseekKey;
+    cheatCatalogStatusBeforeJob = cheatCatalogStatus;
+    cheatCatalogStatus = "translating";
+    setText(cheatVariableState, "翻译中");
+    setCheatVariableCallout("translating", "正在翻译高级作弊标签", "变量编号保持不变；完成后列表会原位更新为简体中文名称。");
+    updateCheatVariableControls(true);
+    void startJob("/api/cheat-catalog", payload, "cheatCatalog");
+  };
+
   const build = () => {
     if (!inspected) { log("需要先通过检查", "请先检查当前项目；目录或项目变更后需要重新检查。", "warn"); return; }
+    if (cheatCatalogKnown && !["ready", "unavailable"].includes(cheatCatalogStatus)) {
+      log("需要先准备高级作弊变量", "请先点击“翻译并载入变量”，再选择要加入游戏菜单的变量。", "warn");
+      return;
+    }
     const source = $("#source-path").value.trim();
     const translate = $("#translate-toggle").checked;
     const confirm = $("#translation-confirm").checked;
@@ -475,6 +745,11 @@
       thinking_enabled: thinkingMode.value === "enabled",
       reasoning_effort: reasoningEffort.value,
     };
+    if (cheatCatalogKnown && cheatCatalogStatus === "ready") {
+      payload.advancedCheatVariableIds = cheatVariableItems
+        .filter((item) => selectedCheatVariableIds.has(item.id))
+        .map((item) => item.id);
+    }
     const template = $("#template-path").value.trim();
     const deepseekKey = $("#deepseek-key").value;
     const signPassword = $("#sign-password").value;
@@ -518,6 +793,16 @@
     $("#download-android").addEventListener("click", () => void downloadToolchain("android_cmdline_tools", "Android Command-line Tools", "Google"));
     $("#download-jdk").addEventListener("click", () => void downloadToolchain("temurin_jdk17", "Temurin JDK 17", "Eclipse Adoptium"));
     inspectButton.addEventListener("click", inspect);
+    prepareCheatVariablesButton.addEventListener("click", prepareCheatVariables);
+    selectAllCheatVariablesButton.addEventListener("click", () => {
+      selectedCheatVariableIds = new Set(cheatVariableItems.map((item) => item.id));
+      renderCheatVariableList();
+    });
+    clearCheatVariablesButton.addEventListener("click", () => {
+      selectedCheatVariableIds.clear();
+      renderCheatVariableList();
+    });
+    cheatVariableSearch.addEventListener("input", renderCheatVariableList);
     buildButton.addEventListener("click", build);
     cancelButton.addEventListener("click", () => void cancel());
     // Inspection is tied to the exact source path.  Changing it after a
@@ -526,6 +811,7 @@
     sourceField.addEventListener("input", () => {
       inspected = false;
       resetTranslationChoice(false);
+      resetCheatCatalog();
       if (!currentJobId) buildButton.disabled = true;
     });
     translationToggle.addEventListener("change", () => { translationOptions.hidden = false; });
@@ -542,6 +828,7 @@
     thinkingMode.addEventListener("change", updateThinkingControls);
     updateThinkingControls();
     resetTranslationChoice(false);
+    resetCheatCatalog();
     await refreshToolchain();
     void heartbeat();
     heartbeatTimer = window.setInterval(() => void heartbeat(), 5000);

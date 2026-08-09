@@ -5,11 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Callable
 
 from .builder import BuildService
+from .cheat_catalog import advanced_cheat_catalog
 from .config import build_config, default_control_config
 from .errors import BlockedError
 from .inspector import inspect_game
@@ -183,9 +186,14 @@ class PipelineService:
     def cheat_labels_need_translation(self, stage: StageManifest) -> bool:
         """Return whether the mandatory cheat-menu label pass has work."""
 
+        return self.cheat_labels_need_translation_at(stage.staged_www)
+
+    def cheat_labels_need_translation_at(self, www_root: str | Path) -> bool:
+        """Return whether a source/staged ``www`` needs the label pass."""
+
         labels = [
             entry
-            for entry in extract_safe_entries(stage.staged_www)
+            for entry in extract_safe_entries(www_root)
             if entry.kind in {"system-variable", "system-switch"}
         ]
         # The injected menu exposes a bounded, per-kind subset of System.json.
@@ -194,9 +202,9 @@ class PipelineService:
         # already-Chinese and would skip the mandatory pass entirely.
         visible = filter_cheat_label_entries(labels)
         locale_is_japanese = False
-        system_path = Path(stage.staged_www) / "data" / "System.json"
+        system_path = Path(www_root) / "data" / "System.json"
         try:
-            system_data = json.loads(system_path.read_text(encoding="utf-8"))
+            system_data = json.loads(system_path.read_text(encoding="utf-8-sig"))
             locale_is_japanese = str(system_data.get("locale", "")).casefold().replace("_", "-").startswith("ja")
         except (OSError, ValueError, TypeError):
             pass
@@ -238,6 +246,56 @@ class PipelineService:
         self._record_translation_modifications(stage, report)
         self._report_translation_failures(report, "作弊标签")
         return report
+
+    def preview_cheat_catalog(
+        self,
+        report: InspectionReport,
+        **kwargs: Any,
+    ) -> tuple[dict[str, Any], TranslationReport | None]:
+        """Translate cheat labels in a disposable System.json-only copy.
+
+        The source game remains read-only.  The normal translation memory is
+        shared with the later build, so final staging reuses validated labels
+        without another provider call.  Only variable IDs and labels are
+        returned to the frontend; no arbitrary source files are exposed.
+        """
+
+        source_www = Path(report.www_root).resolve(strict=True)
+        source_catalog = advanced_cheat_catalog(source_www)
+        if not source_catalog["items"]:
+            return {"status": "ready", "items": []}, None
+        if not self.cheat_labels_need_translation_at(source_www):
+            ready = advanced_cheat_catalog(
+                source_www,
+                translated_www=source_www,
+                status="ready",
+            )
+            return ready, None
+
+        kwargs.pop("force", None)
+        kwargs.setdefault("batch_size", CHEAT_LABEL_MAX_BATCH_SIZE)
+        kwargs.setdefault("max_concurrency", CHEAT_LABEL_MAX_CONCURRENCY)
+        self.state_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="cheat-catalog-", dir=self.state_root) as temporary:
+            preview_www = Path(temporary) / "www"
+            preview_system = preview_www / "data" / "System.json"
+            preview_system.parent.mkdir(parents=True, exist_ok=True)
+            source_system = source_www / "data" / "System.json"
+            shutil.copy2(source_system, preview_system)
+            translation = TranslationService(self.progress, self.cancel_event).translate(
+                preview_www,
+                memory_path=self.state_root / "translation-memory.json",
+                entry_kinds={"system-variable", "system-switch"},
+                force=True,
+                **kwargs,
+            )
+            self._report_translation_failures(translation, "作弊标签预览")
+            ready = advanced_cheat_catalog(
+                source_www,
+                translated_www=preview_www,
+                status="ready",
+            )
+        return ready, translation
 
     def _record_translation_modifications(self, stage: StageManifest, report: TranslationReport) -> None:
         """Record only successful translation edits in the stage manifest.

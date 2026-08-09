@@ -34,7 +34,7 @@ CHEAT_LABEL_PROMPT_VERSION = "mv-safe-v3-cheat-label-zh-cn-preserve-latin"
 # cache keys and reports: it is the identifier accepted by the OpenAI-compatible
 # DeepSeek endpoint, while ``v4flash`` is accepted below as a convenience alias.
 DEFAULT_TRANSLATION_MODEL = "deepseek-v4-flash"
-DEFAULT_TRANSLATION_BATCH_SIZE = 20
+DEFAULT_TRANSLATION_BATCH_SIZE = 60
 DEFAULT_TRANSLATION_CONCURRENCY = 4
 DEFAULT_TRANSLATION_THINKING_ENABLED = True
 DEFAULT_TRANSLATION_REASONING_EFFORT = "high"
@@ -52,6 +52,17 @@ CHEAT_LABEL_MAX_CONCURRENCY = 2
 # small synthetic/repair batches keep the existing JSON path.
 CHEAT_LABEL_DOCUMENT_MIN_ENTRIES = 96
 CHEAT_LABEL_DOCUMENT_PROMPT_VERSION = "mv-safe-v4-cheat-label-document-preserve-latin"
+# Normal game text also benefits from the compact line-oriented protocol, but
+# unlike the cheat-label pass it must retain multi-line dialogue blocks and
+# event context boundaries.  Requests are therefore packed by contiguous
+# context group and capped by both logical-block count and source characters.
+# A small tail remains on the existing JSON route because JSON is stricter and
+# its envelope cost is negligible for fewer than eight blocks.
+BODY_DOCUMENT_MIN_ENTRIES = 8
+BODY_DOCUMENT_MAX_ENTRIES = 60
+BODY_DOCUMENT_MAX_SOURCE_CHARS = 12_000
+BODY_DOCUMENT_SOURCE_CHARS_MIN = 1_000
+BODY_DOCUMENT_SOURCE_CHARS_MAX = 48_000
 _TRANSIENT_HTTP_STATUSES = {408, 425, 429, 500, 502, 503, 504}
 
 
@@ -1028,6 +1039,24 @@ def _request_batch(
     raise TranslationError(str(last_error or "translation request failed"))
 
 
+def _escape_document_cell(value: str) -> str:
+    """Escape one TSV cell without hiding its natural-language text."""
+
+    return (
+        value.replace("\\", "\\\\")
+        .replace("\t", "\\t")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+    )
+
+
+def _unescape_document_cell(value: str) -> str:
+    """Reverse :func:`_escape_document_cell` in a single, unambiguous pass."""
+
+    escapes = {"\\": "\\", "t": "\t", "r": "\r", "n": "\n"}
+    return re.sub(r"\\([\\trn])", lambda match: escapes[match.group(1)], value)
+
+
 def _document_text(entries: list[TranslationEntry]) -> str:
     """Serialize one-label-per-line text for the strict cheat pass."""
 
@@ -1037,13 +1066,7 @@ def _document_text(entries: list[TranslationEntry]) -> str:
             raise TranslationError("cheat-label document mode requires one segment per label")
         # System.json labels are normally one line. Escaping the three TSV
         # delimiters also keeps a malformed plugin label from shifting IDs.
-        value = (
-            entry.segments[0]
-            .replace("\\", "\\\\")
-            .replace("\t", "\\t")
-            .replace("\r", "\\r")
-            .replace("\n", "\\n")
-        )
+        value = _escape_document_cell(entry.segments[0])
         rows.append(f"{entry.entry_id}\t{value}")
     return "\n".join(rows) + ("\n" if rows else "")
 
@@ -1080,17 +1103,209 @@ def _parse_translation_document(content: str, expected_ids: set[str]) -> dict[st
         translated = translated.strip()
         if not translated:
             raise TranslationError("translation document contains an empty result")
-        translated = (
-            translated
-            .replace("\\t", "\t")
-            .replace("\\r", "\r")
-            .replace("\\n", "\n")
-            .replace("\\\\", "\\")
-        )
+        translated = _unescape_document_cell(translated)
         result[item_id] = [translated]
     if set(result) != expected_ids:
         missing = sorted(expected_ids.difference(result))[:3]
         raise TranslationError(f"translation document IDs do not match; missing {missing!r}")
+    return result
+
+
+def _body_context_key(entry: TranslationEntry) -> str:
+    """Return the smallest stable context boundary for one display block.
+
+    Message, choice, speaker-name, and scroll-text entries from the same RPG
+    Maker event ``list`` belong together.  Database fields are grouped by
+    record.  The relative file always participates, so an API document never
+    blends unrelated maps or databases into one context.
+    """
+
+    location = entry.locations[0] if entry.locations else ""
+    try:
+        parts = pointer_parts(location)
+    except ValueError:
+        parts = []
+    if entry.kind in {"message", "choice", "speaker-name", "scroll-text"} and "list" in parts:
+        list_index = parts.index("list")
+        return f"{entry.relative_file}|event|/{'/'.join(parts[: list_index + 1])}"
+    if entry.kind == "database-field" and parts:
+        # Actors/Items/etc. are arrays of records.  Keep all translated fields
+        # of one record together while separating adjacent records.
+        record_parts = parts[:-1]
+        if record_parts and record_parts[0].isdigit():
+            record_parts = record_parts[:1]
+        return f"{entry.relative_file}|record|/{'/'.join(record_parts)}"
+    return f"{entry.relative_file}|{entry.kind}|{entry.field}"
+
+
+def _body_source_chars(item: tuple[str, list[TranslationEntry]]) -> int:
+    entry = item[1][0]
+    return sum(len(segment) for segment in entry.segments)
+
+
+def _split_body_context_unit(
+    unit: list[tuple[str, list[TranslationEntry]]],
+    max_entries: int,
+    max_source_chars: int,
+) -> list[list[tuple[str, list[TranslationEntry]]]]:
+    """Split an oversized context only at logical-entry boundaries."""
+
+    chunks: list[list[tuple[str, list[TranslationEntry]]]] = []
+    current: list[tuple[str, list[TranslationEntry]]] = []
+    current_chars = 0
+    for item in unit:
+        item_chars = _body_source_chars(item)
+        if current and (len(current) >= max_entries or current_chars + item_chars > max_source_chars):
+            chunks.append(current)
+            current = []
+            current_chars = 0
+        current.append(item)
+        current_chars += item_chars
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _plan_body_document_batches(
+    pending: list[tuple[str, list[TranslationEntry]]],
+    max_entries: int = BODY_DOCUMENT_MAX_ENTRIES,
+    max_source_chars: int = BODY_DOCUMENT_MAX_SOURCE_CHARS,
+) -> list[list[tuple[str, list[TranslationEntry]]]]:
+    """Pack contiguous contexts into bounded, file-local text documents."""
+
+    if not pending:
+        return []
+    max_entries = max(1, min(BODY_DOCUMENT_MAX_ENTRIES, int(max_entries)))
+    max_source_chars = max(1, int(max_source_chars))
+
+    units: list[list[tuple[str, list[TranslationEntry]]]] = []
+    unit: list[tuple[str, list[TranslationEntry]]] = []
+    unit_key: str | None = None
+    for item in pending:
+        key = _body_context_key(item[1][0])
+        if unit and key != unit_key:
+            units.append(unit)
+            unit = []
+        unit.append(item)
+        unit_key = key
+    if unit:
+        units.append(unit)
+
+    batches: list[list[tuple[str, list[TranslationEntry]]]] = []
+    current: list[tuple[str, list[TranslationEntry]]] = []
+    current_chars = 0
+    current_file: str | None = None
+    for context_unit in units:
+        unit_file = context_unit[0][1][0].relative_file
+        unit_chars = sum(_body_source_chars(item) for item in context_unit)
+        oversized = len(context_unit) > max_entries or unit_chars > max_source_chars
+        if oversized:
+            if current:
+                batches.append(current)
+                current = []
+                current_chars = 0
+                current_file = None
+            batches.extend(_split_body_context_unit(context_unit, max_entries, max_source_chars))
+            continue
+        if current and (
+            current_file != unit_file
+            or len(current) + len(context_unit) > max_entries
+            or current_chars + unit_chars > max_source_chars
+        ):
+            batches.append(current)
+            current = []
+            current_chars = 0
+        current.extend(context_unit)
+        current_chars += unit_chars
+        current_file = unit_file
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _body_document_text(
+    entries: list[TranslationEntry],
+    translations: dict[str, list[str]] | None = None,
+    *,
+    protect_provider: bool = False,
+) -> str:
+    """Serialize multi-segment body text while exposing context boundaries."""
+
+    rows: list[str] = []
+    previous_context: str | None = None
+    context_number = 0
+    for entry in entries:
+        context = _body_context_key(entry)
+        if context != previous_context:
+            if previous_context is not None:
+                rows.append("CONTEXT_END")
+            context_number += 1
+            rows.append(f"CONTEXT_BEGIN\tC{context_number:04d}")
+            previous_context = context
+        segments = (translations or {}).get(entry.entry_id, entry.segments)
+        if len(segments) != len(entry.segments):
+            segments = entry.segments
+        total = len(entry.segments)
+        for index, segment in enumerate(segments, start=1):
+            value = (
+                _protect_provider_segment(segment, preserve_han=True)
+                if protect_provider
+                else segment
+            )
+            rows.append(
+                f"{entry.entry_id}\t{index}/{total}\t{_escape_document_cell(value)}"
+            )
+    if previous_context is not None:
+        rows.append("CONTEXT_END")
+    return "\n".join(rows) + ("\n" if rows else "")
+
+
+def _parse_body_translation_document(
+    content: str,
+    entries: list[TranslationEntry],
+) -> dict[str, list[str]]:
+    """Parse body TSV and require every original segment exactly once."""
+
+    expected_counts = {entry.entry_id: len(entry.segments) for entry in entries}
+    collected: dict[str, dict[int, str]] = {entry_id: {} for entry_id in expected_counts}
+    for raw_line in content.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("```") or stripped.startswith("#"):
+            continue
+        if stripped.startswith("CONTEXT_BEGIN") or stripped == "CONTEXT_END":
+            continue
+        parts = raw_line.split("\t", 2)
+        if len(parts) != 3:
+            # Introductory prose is ignored, but a line beginning with a known
+            # ID is a malformed result rather than harmless prose.
+            if parts and parts[0].strip() in expected_counts:
+                raise TranslationError("body translation document row is malformed")
+            continue
+        item_id = parts[0].strip()
+        if item_id not in expected_counts:
+            if re.fullmatch(r"[0-9a-f]{24}", item_id, flags=re.IGNORECASE):
+                raise TranslationError("body translation document contains an unexpected ID")
+            continue
+        marker = parts[1].strip()
+        match = re.fullmatch(r"(\d+)/(\d+)", marker)
+        if match is None:
+            raise TranslationError("body translation document segment marker is malformed")
+        segment_index, segment_total = (int(value) for value in match.groups())
+        if segment_total != expected_counts[item_id] or not 1 <= segment_index <= segment_total:
+            raise TranslationError("body translation document segment count does not match")
+        zero_based = segment_index - 1
+        if zero_based in collected[item_id]:
+            raise TranslationError("body translation document contains a duplicate segment")
+        collected[item_id][zero_based] = _unescape_document_cell(parts[2])
+
+    result: dict[str, list[str]] = {}
+    for entry in entries:
+        segments = collected[entry.entry_id]
+        if len(segments) != len(entry.segments):
+            raise TranslationError(
+                f"body translation document is missing segments for {entry.entry_id}"
+            )
+        result[entry.entry_id] = [segments[index] for index in range(len(entry.segments))]
     return result
 
 
@@ -1152,6 +1367,170 @@ def _request_document(
             last_error = exc
             raise
     raise TranslationError(str(last_error or "translation document request failed"))
+
+
+def _request_body_document(
+    transport: TranslationTransport,
+    api_key: str,
+    model: str,
+    target_language: str,
+    entries: list[TranslationEntry],
+    thinking_enabled: bool,
+    reasoning_effort: str,
+    cancel_event=None,
+    document_directory: Path | None = None,
+) -> dict[str, list[str]]:
+    """Translate a compact, context-aware multi-segment body document."""
+
+    document = _body_document_text(entries, protect_provider=True)
+    result_path: Path | None = None
+    if document_directory is not None:
+        batch_key = hashlib.sha256(
+            "|".join(entry.entry_id for entry in entries).encode("utf-8")
+        ).hexdigest()[:16]
+        source_path = document_directory / f"{batch_key}-source.txt"
+        result_path = document_directory / f"{batch_key}-result.txt"
+        _write_translation_document(source_path, document)
+        _write_translation_document(result_path, "")
+        # Build the prompt from the just-written UTF-8 document. This keeps the
+        # auditable file and the exact provider input on the same code path.
+        document = source_path.read_text(encoding="utf-8")
+    prompt = (
+        "Translate this RPG Maker MV display-text document into the requested target language. "
+        "The document is divided by CONTEXT_BEGIN/CONTEXT_END markers. Read all consecutive entries "
+        "inside one context together to preserve speakers, pronouns, tone, terminology, and choice meaning, "
+        "but do not blend information across contexts. Each content row is "
+        "ENTRY_ID<TAB>SEGMENT_INDEX/TOTAL<TAB>TEXT. Return content rows only, exactly one row for every "
+        "input segment, with the same entry ID, index/total, order, and translated text after the second tab. "
+        "Do not return context markers, numbering, explanations, Markdown, or JSON. Existing Chinese (Han) "
+        "runs are marked __G2A_KEEP_HAN_NNN__ and all controls are marked __G2A_TOKEN_NNN__; copy every "
+        "marker byte-for-byte. Preserve numbers, code, paths, and tags. Keep each logical segment separate; "
+        "encode a line break inside text as the two characters \\n.\n"
+        f"TARGET_LANGUAGE={target_language}\nSOURCE_DOCUMENT_BEGIN\n{document}SOURCE_DOCUMENT_END"
+    )
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a constrained game-dialogue translation engine."},
+            {"role": "user", "content": prompt},
+        ],
+        "thinking": {"type": "enabled" if thinking_enabled else "disabled"},
+        "temperature": 0.1,
+        "stream": False,
+    }
+    if thinking_enabled:
+        payload["reasoning_effort"] = reasoning_effort
+    estimated_chars = sum(len(segment) for entry in entries for segment in entry.segments)
+    effort_floor = {"low": 2048, "high": 4096, "max": 8192}[reasoning_effort] if thinking_enabled else 1024
+    payload["max_tokens"] = min(131072, max(effort_floor, estimated_chars * 3 + 1024))
+    if cancel_event is not None and cancel_event.is_set():
+        raise CancelledError("translation cancelled")
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            data = transport.chat(payload, api_key)
+            content, _ = _content_from_response(data)
+            if result_path is not None:
+                _write_translation_document(result_path, content)
+                content = result_path.read_text(encoding="utf-8")
+            return _parse_body_translation_document(content, entries)
+        except DeepSeekHTTPError as exc:
+            last_error = exc
+            if exc.status not in _TRANSIENT_HTTP_STATUSES or attempt == 2:
+                raise
+            _wait_for_retry(cancel_event, _retry_delay(attempt, exc.retry_after))
+        except TranslationError as exc:
+            last_error = exc
+            raise
+    raise TranslationError(str(last_error or "body translation document request failed"))
+
+
+def _body_recovery_split_index(entries: list[TranslationEntry]) -> int:
+    """Prefer a context boundary nearest the midpoint during recovery."""
+
+    midpoint = max(1, len(entries) // 2)
+    boundaries = [
+        index
+        for index in range(1, len(entries))
+        if _body_context_key(entries[index - 1]) != _body_context_key(entries[index])
+    ]
+    if not boundaries:
+        return midpoint
+    return min(boundaries, key=lambda index: (abs(index - midpoint), index))
+
+
+def _request_body_document_with_recovery(
+    transport: TranslationTransport,
+    api_key: str,
+    model: str,
+    target_language: str,
+    entries: list[TranslationEntry],
+    thinking_enabled: bool,
+    reasoning_effort: str,
+    cancel_event=None,
+    document_directory: Path | None = None,
+) -> dict[str, list[str]]:
+    """Retry a body document without thinking, then split it safely."""
+
+    try:
+        return _request_body_document(
+            transport,
+            api_key,
+            model,
+            target_language,
+            entries,
+            thinking_enabled,
+            reasoning_effort,
+            cancel_event,
+            document_directory,
+        )
+    except (DeepSeekHTTPError, TranslationError) as exc:
+        if thinking_enabled and _is_length_response_error(exc):
+            try:
+                return _request_body_document(
+                    transport,
+                    api_key,
+                    model,
+                    target_language,
+                    entries,
+                    False,
+                    reasoning_effort,
+                    cancel_event,
+                    document_directory,
+                )
+            except (DeepSeekHTTPError, TranslationError) as fallback_error:
+                exc = fallback_error
+        if not _is_batch_shape_error(exc):
+            raise
+        if len(entries) <= 1:
+            # A malformed/truncated singleton is isolated to that logical
+            # block. Returning no candidate lets the caller retain its source
+            # text while still applying every successful sibling split.
+            return {}
+        split_index = _body_recovery_split_index(entries)
+        first = _request_body_document_with_recovery(
+            transport,
+            api_key,
+            model,
+            target_language,
+            entries[:split_index],
+            thinking_enabled,
+            reasoning_effort,
+            cancel_event,
+            document_directory,
+        )
+        second = _request_body_document_with_recovery(
+            transport,
+            api_key,
+            model,
+            target_language,
+            entries[split_index:],
+            thinking_enabled,
+            reasoning_effort,
+            cancel_event,
+            document_directory,
+        )
+        return {**first, **second}
 
 
 def _request_document_with_recovery(
@@ -1249,6 +1628,8 @@ def _is_batch_shape_error(error: Exception) -> bool:
             "translation json must",
             "translation ids do not match",
             "translation ids are duplicated",
+            "translation document",
+            "body translation document",
             "response content is empty",
         )
     )
@@ -1270,15 +1651,30 @@ def _request_batch_with_recovery(
     strict_simplified_chinese: bool = False,
     document_source_path: Path | None = None,
     document_result_path: Path | None = None,
+    body_document: bool = False,
+    body_document_directory: Path | None = None,
 ) -> dict[str, list[str]]:
     """Request a batch and halve it when the provider cannot serialize it.
 
     The first request remains bounded by the strict batch cap.  Splitting is a
     recovery path for providers that still truncate at that size; successful
-    child responses are merged only when every child succeeds, so callers never
-    apply a partial response under the original batch's identity.
+    child responses retain their entry IDs, so callers never apply output to a
+    different block. Body-document recovery may return successful siblings
+    while leaving one malformed singleton absent for source-text retention.
     """
 
+    if body_document:
+        return _request_body_document_with_recovery(
+            transport,
+            api_key,
+            model,
+            target_language,
+            entries,
+            thinking_enabled,
+            reasoning_effort,
+            cancel_event,
+            body_document_directory,
+        )
     if strict_simplified_chinese and len(entries) >= CHEAT_LABEL_DOCUMENT_MIN_ENTRIES:
         return _request_document_with_recovery(
             transport,
@@ -1338,6 +1734,8 @@ def _request_batch_with_recovery(
             reasoning_effort,
             cancel_event,
             strict_simplified_chinese,
+            body_document=body_document,
+            body_document_directory=body_document_directory,
         )
         second = _request_batch_with_recovery(
             transport,
@@ -1349,6 +1747,8 @@ def _request_batch_with_recovery(
             reasoning_effort,
             cancel_event,
             strict_simplified_chinese,
+            body_document=body_document,
+            body_document_directory=body_document_directory,
         )
         return {**first, **second}
 
@@ -1427,6 +1827,12 @@ class TranslationService:
             max_concurrency,
             1,
             MAX_TRANSLATION_CONCURRENCY,
+        )
+        body_document_source_chars = _setting_int(
+            "GAME2APK_TRANSLATION_DOCUMENT_CHARS",
+            BODY_DOCUMENT_MAX_SOURCE_CHARS,
+            BODY_DOCUMENT_SOURCE_CHARS_MIN,
+            BODY_DOCUMENT_SOURCE_CHARS_MAX,
         )
         if not isinstance(thinking_enabled, bool):
             raise ConfigurationError("thinking_enabled must be true or false")
@@ -1564,8 +1970,29 @@ class TranslationService:
             # _request_document_with_recovery splits only if the provider says
             # the document is too large or returns incomplete IDs.
             batches = [pending]
+        elif not strict_simplified_chinese:
+            # Body requests use compact TSV documents while preserving each
+            # event/database context.  The count cap keeps response shape
+            # predictable; the character cap protects long dialogue blocks.
+            batches = _plan_body_document_batches(
+                pending,
+                max_entries=min(batch_size, BODY_DOCUMENT_MAX_ENTRIES),
+                max_source_chars=body_document_source_chars,
+            )
         else:
             batches = [pending[offset : offset + batch_size] for offset in range(0, len(pending), batch_size)]
+        uses_body_document = bool(
+            not strict_simplified_chinese
+            and any(len(batch) >= BODY_DOCUMENT_MIN_ENTRIES for batch in batches)
+        )
+        body_document_directory: Path | None = None
+        if uses_body_document:
+            document_source_path = memory.path.parent / "body-translation-source.txt"
+            document_result_path = memory.path.parent / "body-translation-result.txt"
+            body_document_directory = memory.path.parent / "body-translation-batches"
+            report.document_source_path = str(document_source_path)
+            report.document_result_path = str(document_result_path)
+            _write_translation_document(document_source_path, _body_document_text(entries))
         executor: ThreadPoolExecutor | None = None
         futures: list[Any] = []
         cancelled = False
@@ -1590,6 +2017,11 @@ class TranslationService:
                         strict_simplified_chinese,
                         document_source_path if strict_simplified_chinese and len(pending) >= CHEAT_LABEL_DOCUMENT_MIN_ENTRIES else None,
                         document_result_path if strict_simplified_chinese and len(pending) >= CHEAT_LABEL_DOCUMENT_MIN_ENTRIES else None,
+                        body_document=(
+                            not strict_simplified_chinese
+                            and len(batch) >= BODY_DOCUMENT_MIN_ENTRIES
+                        ),
+                        body_document_directory=body_document_directory,
                     )
                     for batch in batches
                 ]
@@ -1785,14 +2217,24 @@ class TranslationService:
             for entry in entries:
                 candidate = translations.get(entry.entry_id)
                 value = candidate[0] if candidate and len(candidate) == 1 else entry.source_text
-                escaped = (
-                    value.replace("\\", "\\\\")
-                    .replace("\t", "\\t")
-                    .replace("\r", "\\r")
-                    .replace("\n", "\\n")
-                )
+                escaped = _escape_document_cell(value)
                 result_rows.append(f"{entry.entry_id}\t{escaped}")
             _write_translation_document(document_result_path, "\n".join(result_rows) + ("\n" if result_rows else ""))
+        elif uses_body_document and document_result_path is not None:
+            # Successful and cached translations are written beside retained
+            # originals for failed entries. The local TXT is reviewable and
+            # can never shift JSON locations because application still uses
+            # entry IDs plus exact segment counts.
+            _write_translation_document(
+                document_result_path,
+                _body_document_text(entries, translations),
+            )
+            roundtrip = _parse_body_translation_document(
+                document_result_path.read_text(encoding="utf-8"),
+                entries,
+            )
+            for entry_id in list(translations):
+                translations[entry_id] = roundtrip[entry_id]
         apply_failures = apply_translations(www, entries, translations)
         report.failures.extend(apply_failures)
         report.entries_applied = len(translations) - len(apply_failures)

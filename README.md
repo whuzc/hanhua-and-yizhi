@@ -2,8 +2,8 @@
 
 RPG Maker MV 项目迁移到 Android 的 Windows 本地工具。它把**用户自己拥有或获得授权的 MV 项目**暂存到干净模板中，生成可侧载安装的签名 APK，并输出可追溯的静态验收报告。
 
-> 当前工具版本：`v1.3.10`（正文截断自动降思考并二分恢复；翻译失败保留原文但不阻断构建）
-> [下载 Windows portable v1.3.10](https://github.com/whuzc/hanhua-and-yizhi/releases/tag/v1.3.10)
+> 当前工具版本：`v1.3.11`（正文按上下文 TXT 批次翻译；高级作弊变量可先翻译、再勾选进入菜单）
+> [下载 Windows portable v1.3.11](https://github.com/whuzc/hanhua-and-yizhi/releases/tag/v1.3.11)
 
 ## 这是什么
 
@@ -81,13 +81,14 @@ Gradle 用户目录是跨项目共用的 `GRADLE_USER_HOME`，不是某一个游
 - 只翻译非中文文本；纯中文块保留，混合文本中的中文片段也保留；
 - 连续对话行会组成一个完整消息块发送，保留上下文、行数、顺序和 MV 控制符，不会逐词翻译；
 - 默认开启 thinking，可选择关闭，或选择思考强度 `low`、`high`、`max`；强度越高通常越自然，也越慢、越耗 Token；
-- 默认每批 20 个文本块、最多 4 路并发，并启用去重、翻译缓存、占位符保护和限流重试。
+- 正文默认按上下文整合为每批最多 60 个逻辑文本块或 12,000 个源字符的 TXT/TSV 请求、最多 4 路并发；小批次仍使用 JSON，并启用去重、翻译缓存、占位符保护和限流重试。
 
 可用环境变量调整吞吐：
 
 ```powershell
 $env:GAME2APK_TRANSLATION_CONCURRENCY = "4"  # 1–8
-$env:GAME2APK_TRANSLATION_BATCH_SIZE = "20" # 1–100
+$env:GAME2APK_TRANSLATION_BATCH_SIZE = "60" # 1–100，正文仍最多 60 块
+$env:GAME2APK_TRANSLATION_DOCUMENT_CHARS = "12000" # 1000–48000，建议保持默认
 ```
 
 机器翻译仍可能有专有名词或语气问题。建议先备份项目并逐段审阅结果。完整策略见 [docs/translation-performance.md](game2apk-tool/docs/translation-performance.md)。

@@ -10,3 +10,8 @@ dist/*.aab
 *.jks
 *.rpgsave
 
+# Local PyInstaller smoke-test leftovers; official portable artifacts remain
+# under dist/ and are packaged/released separately.
+/_internal/
+/game2apk-tool.exe
+/game2apk-ui.exe

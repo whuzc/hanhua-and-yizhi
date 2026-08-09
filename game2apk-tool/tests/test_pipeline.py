@@ -11,6 +11,10 @@ from pathlib import Path
 from unittest import mock
 
 from game2apk.builder import ALIYUN_GRADLE_DISTRIBUTION, OFFICIAL_GRADLE_DISTRIBUTION, AsciiPathMapper, BuildService
+from game2apk.cheat_catalog import (
+    advanced_cheat_catalog,
+    normalize_advanced_cheat_variable_ids,
+)
 from game2apk.config import build_config, default_control_config, load_android_config
 from game2apk.errors import BlockedError, ConfigurationError
 from game2apk.inspector import inspect_game
@@ -247,6 +251,136 @@ class PipelineTests(unittest.TestCase):
         Path(stage.staged_www, "index.html").write_text(index.replace('js/rpg_core.js', 'js/rpg_core.js"></script><script src="js/rpg_core.js'), encoding="utf-8")
         with self.assertRaises(BlockedError):
             patch_staged_www(stage.staged_www, self._config())
+
+    def test_advanced_cheat_selection_is_normalized_and_injected(self) -> None:
+        system_path = self.www / "data" / "System.json"
+        system = json.loads(system_path.read_text(encoding="utf-8"))
+        system["variables"] = ["", "欲望", "", "好感度", "未选择"]
+        system["switches"] = ["", "回想解锁"]
+        system_path.write_text(json.dumps(system, ensure_ascii=False), encoding="utf-8")
+        report = inspect_game(self.game)
+        stage = StageService().stage(report, self.root / ".work", minimum_free_bytes=0)
+        data = build_config(
+            control=default_control_config(),
+            advanced_cheat_variable_ids=["variable:3", "variable:1", "variable:3"],
+        )
+        config = BuildConfig(
+            data["appName"],
+            data["applicationId"],
+            data["versionCode"],
+            data["versionName"],
+            control_config=data["control"],
+            advanced_cheat_variable_ids=data["advancedCheatVariableIds"],
+        )
+        self.assertEqual(config.advanced_cheat_variable_ids, ["variable:1", "variable:3"])
+        patch_staged_www(stage.staged_www, config)
+        bridge = Path(stage.staged_www, "js", "game2apk-input.js").read_text(encoding="utf-8")
+        self.assertIn("cheat.selectedVariableIds = [1,3];", bridge)
+        self.assertNotIn("__GAME2APK_ADVANCED_CHEAT_VARIABLE_IDS__", bridge)
+        # Switch discovery remains independent and is not filtered by the
+        # numeric-variable selection contract.
+        self.assertIn("cheat.switchFields.push([i, label])", bridge)
+
+    def test_advanced_cheat_selection_rejects_non_discoverable_ids(self) -> None:
+        system_path = self.www / "data" / "System.json"
+        system = json.loads(system_path.read_text(encoding="utf-8"))
+        system["variables"] = ["", "有效变量"]
+        system_path.write_text(json.dumps(system, ensure_ascii=False), encoding="utf-8")
+        report = inspect_game(self.game)
+        stage = StageService().stage(report, self.root / ".work", minimum_free_bytes=0)
+        config = replace(self._config(), advanced_cheat_variable_ids=["variable:2"])
+        with self.assertRaisesRegex(ConfigurationError, "not discoverable"):
+            patch_staged_www(stage.staged_www, config)
+
+    def test_advanced_cheat_catalog_keeps_stable_ids_across_translation(self) -> None:
+        source = self.root / "catalog-source"
+        translated = self.root / "catalog-translated"
+        (source / "data").mkdir(parents=True)
+        (translated / "data").mkdir(parents=True)
+        (source / "data" / "System.json").write_text(
+            json.dumps({"variables": ["", "発情中", "", "Affection"]}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        (translated / "data" / "System.json").write_text(
+            json.dumps({"variables": ["", "发情中", "", "Affection"]}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        catalog = advanced_cheat_catalog(source, translated_www=translated, status="ready")
+        self.assertEqual([item["id"] for item in catalog["items"]], ["variable:1", "variable:3"])
+        self.assertEqual(catalog["items"][0]["sourceLabel"], "発情中")
+        self.assertEqual(catalog["items"][0]["translatedLabel"], "发情中")
+        self.assertEqual(catalog["items"][0]["displayLabel"], "发情中")
+
+    def test_advanced_cheat_id_contract_distinguishes_default_and_empty(self) -> None:
+        self.assertIsNone(normalize_advanced_cheat_variable_ids(None))
+        self.assertEqual(normalize_advanced_cheat_variable_ids([]), [])
+        self.assertEqual(
+            normalize_advanced_cheat_variable_ids(["variable:12", "variable:2", "variable:12"]),
+            ["variable:2", "variable:12"],
+        )
+        with self.assertRaises(ConfigurationError):
+            normalize_advanced_cheat_variable_ids(["switch:1"])
+
+    def test_advanced_cheat_selection_changes_prepared_stage_resume_key(self) -> None:
+        report = inspect_game(self.game)
+        service = PipelineService(self.root)
+        template = self.root / "template-resume-key"
+        template.mkdir()
+        all_variables = self._config()
+        no_variables = replace(all_variables, advanced_cheat_variable_ids=[])
+        common = {
+            "translate": False,
+            "thinking_enabled": True,
+            "reasoning_effort": "low",
+        }
+        self.assertNotEqual(
+            service.build_resume_key(report, template, all_variables, **common),
+            service.build_resume_key(report, template, no_variables, **common),
+        )
+
+    def test_cheat_catalog_preview_translates_disposable_copy_only(self) -> None:
+        system_path = self.www / "data" / "System.json"
+        system = json.loads(system_path.read_text(encoding="utf-8"))
+        system.update(
+            {
+                "locale": "ja_JP",
+                "variables": ["", "発情中"],
+                "switches": [""],
+            }
+        )
+        system_path.write_text(json.dumps(system, ensure_ascii=False), encoding="utf-8")
+        original_bytes = system_path.read_bytes()
+        inspection = inspect_game(self.game)
+
+        def responder(payload):
+            items = json.loads(payload["messages"][-1]["content"].split("INPUT=", 1)[1])
+            translated = [
+                {"id": item["id"], "segments": ["发情中"]}
+                for item in items
+            ]
+            return {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": json.dumps({"translations": translated}, ensure_ascii=False)},
+                    }
+                ]
+            }
+
+        catalog, translation = PipelineService(self.root).preview_cheat_catalog(
+            inspection,
+            model="deepseek-v4-flash",
+            api_key="fake",
+            transport=FakeTransport(responder=responder),
+            confirmed_third_party=True,
+            thinking_enabled=False,
+        )
+        self.assertIsNotNone(translation)
+        self.assertEqual(catalog["status"], "ready")
+        self.assertEqual(catalog["items"][0]["id"], "variable:1")
+        self.assertEqual(catalog["items"][0]["sourceLabel"], "発情中")
+        self.assertEqual(catalog["items"][0]["translatedLabel"], "发情中")
+        self.assertEqual(system_path.read_bytes(), original_bytes)
 
     def test_safe_extraction_and_placeholder_validation(self) -> None:
         entries = extract_safe_entries(self.www)

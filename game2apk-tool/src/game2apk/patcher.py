@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
+from .cheat_catalog import validate_advanced_cheat_selection
 from .config import write_android_config
 from .errors import BlockedError
 from .models import BuildConfig
@@ -111,6 +113,9 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
     // development, affection, or other custom variables differently.
     cheat.legacyCustomFields = cheat.customFields.slice();
     cheat.customFields = cheat.customFields.slice();
+    // Replaced at staging time with null (backward-compatible all) or a
+    // validated array of numeric variable IDs selected in the desktop UI.
+    cheat.selectedVariableIds = __GAME2APK_ADVANCED_CHEAT_VARIABLE_IDS__;
     cheat.switchFields = [];
     cheat.recallCandidates = [];
     cheat.dynamicCatalog = { variables: [], switches: [], recallMaps: [] };
@@ -150,7 +155,13 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
       }
       // If a title does not name its variables, preserve the prior game's
       // explicit safe list rather than exposing every numeric slot blindly.
-      cheat.customFields = discovered.length ? discovered : cheat.legacyCustomFields.slice();
+      if (Array.isArray(cheat.selectedVariableIds)) {
+        var selected = {};
+        cheat.selectedVariableIds.forEach(function (id) { selected[String(id)] = true; });
+        cheat.customFields = discovered.filter(function (field) { return !!selected[String(field[0])]; });
+      } else {
+        cheat.customFields = discovered.length ? discovered : cheat.legacyCustomFields.slice();
+      }
       var switches = global.$dataSystem && global.$dataSystem.switches || [];
       cheat.switchFields = [];
       for (i = 1; i < switches.length && cheat.switchFields.length < 128; i++) {
@@ -494,6 +505,7 @@ def patch_staged_www(staged_www: str | Path, build_config: BuildConfig | dict) -
     if bridge_path.exists():
         raise BlockedError("game2apk-input.js already exists in staging; refusing overwrite")
     if isinstance(build_config, BuildConfig):
+        selected_variable_ids = build_config.advanced_cheat_variable_ids
         config_data = {
             "schemaVersion": 1,
             "appName": build_config.app_name,
@@ -501,16 +513,32 @@ def patch_staged_www(staged_www: str | Path, build_config: BuildConfig | dict) -
             "versionCode": build_config.version_code,
             "versionName": build_config.version_name,
             "control": build_config.control_config,
+            "advancedCheatVariableIds": selected_variable_ids,
         }
     else:
         config_data = dict(build_config)
+        selected_variable_ids = config_data.get("advancedCheatVariableIds")
+    selected_variable_ids = validate_advanced_cheat_selection(root, selected_variable_ids)
+    config_data["advancedCheatVariableIds"] = selected_variable_ids
+    selected_variable_indexes = (
+        None
+        if selected_variable_ids is None
+        else [int(item.split(":", 1)[1]) for item in selected_variable_ids]
+    )
     assert_no_secrets(config_data)
     audio_extension_patched = _patch_encrypted_audio_extension(root)
     newline = "\r\n" if "\r\n" in index else "\n"
     insertion = newline + "    <script type=\"text/javascript\" src=\"js/game2apk-input.js\"></script>"
     patched = index[: core_matches[0].end()] + insertion + index[core_matches[0].end() :]
     atomic_write_text(index_path, patched, encoding="utf-8-sig" if encoding == "utf-8-sig" else "utf-8")
-    atomic_write_text(bridge_path, BRIDGE_SOURCE.replace("\n", newline))
+    selection_marker = "__GAME2APK_ADVANCED_CHEAT_VARIABLE_IDS__"
+    if BRIDGE_SOURCE.count(selection_marker) != 1:
+        raise BlockedError("advanced cheat selection injection marker is invalid")
+    bridge_source = BRIDGE_SOURCE.replace(
+        selection_marker,
+        json.dumps(selected_variable_indexes, ensure_ascii=True, separators=(",", ":")),
+    )
+    atomic_write_text(bridge_path, bridge_source.replace("\n", newline))
     config_path = root / "game2apk-config.json"
     write_android_config(config_path, config_data)
     return {

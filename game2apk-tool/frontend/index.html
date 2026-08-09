@@ -98,8 +98,37 @@
           <input id="sign-password" class="text-field" type="password" autocomplete="off" />
         </section>
 
+        <section class="panel cheat-variable-panel glass-surface" data-section="cheat-variables" aria-labelledby="cheat-variable-title">
+          <div class="panel-heading">
+            <span class="step-index">03</span>
+            <div><h3 id="cheat-variable-title">高级作弊变量</h3><p>标签翻译完成后，按稳定编号选择要放进游戏高级作弊菜单的变量。</p></div>
+            <span id="cheat-variable-state" class="mini-state">等待检查</span>
+          </div>
+          <div id="cheat-variable-callout" class="callout pending" data-state="idle">
+            <span class="callout-dot"></span>
+            <div><strong>尚未载入变量</strong><small>先检查项目，再翻译并载入高级作弊标签；选择始终按变量编号保存。</small></div>
+          </div>
+          <div class="cheat-variable-actions">
+            <button id="prepare-cheat-variables" class="ghost-button prepare-cheat-button" type="button" disabled>翻译并载入变量</button>
+            <label class="cheat-search" for="cheat-variable-search">
+              <span>搜索变量</span>
+              <input id="cheat-variable-search" class="text-field" type="search" placeholder="按中文译名、原文或编号筛选" autocomplete="off" disabled />
+            </label>
+            <div class="cheat-bulk-actions" aria-label="批量选择变量">
+              <button id="select-all-cheat-variables" class="mini-button" type="button" disabled>全选</button>
+              <button id="clear-cheat-variables" class="text-button" type="button" disabled>清空</button>
+            </div>
+          </div>
+          <div id="cheat-variable-summary" class="cheat-variable-summary" aria-live="polite">
+            <strong>已选 0 / 0</strong><span>翻译后会优先显示简体中文名称</span>
+          </div>
+          <div id="cheat-variable-list" class="cheat-variable-list" data-state="idle" role="group" aria-label="高级作弊变量列表" aria-describedby="cheat-variable-summary">
+            <div class="cheat-variable-empty"><span aria-hidden="true">◇</span><p>检查项目后即可准备变量</p><small>原文只作辅助核对；构建请求保存变量编号，不依赖显示名称。</small></div>
+          </div>
+        </section>
+
         <section class="panel report-panel glass-surface" data-section="report">
-          <div class="panel-heading"><span class="step-index">03</span><div><h3>检查报告 / 构建日志</h3><p>阶段、百分比和结果会实时显示；取消会请求后台安全停止当前任务。</p></div><span id="report-state" class="mini-state">等待操作</span></div>
+          <div class="panel-heading"><span class="step-index">04</span><div><h3>检查报告 / 构建日志</h3><p>阶段、百分比和结果会实时显示；取消会请求后台安全停止当前任务。</p></div><span id="report-state" class="mini-state">等待操作</span></div>
           <div id="report-log" class="report-log" role="log" aria-live="polite"><div class="empty-state"><div class="empty-icon">◌</div><p>选择项目后点击“检查项目”</p><small>检查通过后才能开始构建与签名。</small></div></div>
           <div class="progress-meta"><span id="progress-label">尚未开始</span><span id="progress-value">0%</span></div>
           <div class="progress-track" aria-label="任务进度"><span id="progress-fill"></span></div>

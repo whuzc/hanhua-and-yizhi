@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Callable, TypeAlias
 from urllib.parse import urlparse
 
+from .cheat_catalog import advanced_cheat_catalog, normalize_advanced_cheat_variable_ids
 from .config import build_config, default_control_config
 from .errors import CancelledError, ConfigurationError, Game2ApkError
 from .models import BuildConfig
@@ -139,6 +140,18 @@ def _translation_profile_for_report(report: Any, progress: Callable[[str, float,
     return profile
 
 
+def _cheat_catalog_for_report(report: Any) -> dict[str, Any]:
+    """Return only stable IDs and labels from the inspected System.json."""
+
+    www_root = getattr(report, "www_root", None)
+    if not isinstance(www_root, str):
+        return {"status": "unavailable", "items": []}
+    try:
+        return advanced_cheat_catalog(www_root, status="discovered")
+    except (OSError, ValueError, TypeError, Game2ApkError):
+        return {"status": "unavailable", "items": []}
+
+
 def _path_text(value: Any, field_name: str) -> str:
     if not isinstance(value, str):
         raise ConfigurationError(f"{field_name} must be a text path")
@@ -226,6 +239,14 @@ class BuildRequest:
             version_code=version_code,
             version_name=str(version_name),
             control=default_control_config(),
+            advanced_cheat_variable_ids=normalize_advanced_cheat_variable_ids(
+                _payload_value(
+                    payload,
+                    "advanced_cheat_variable_ids",
+                    "advancedCheatVariableIds",
+                    default=None,
+                )
+            ),
         )
         config = BuildConfig(
             data["appName"],
@@ -233,6 +254,7 @@ class BuildRequest:
             data["versionCode"],
             data["versionName"],
             control_config=data["control"],
+            advanced_cheat_variable_ids=data["advancedCheatVariableIds"],
         )
         translate = _payload_bool(payload, "translate", default=False)
         confirm = _payload_bool(payload, "confirm", "confirm_third_party", default=False)
@@ -257,6 +279,39 @@ class BuildRequest:
             sign_password=_optional_secret(_payload_value(payload, "sign_password", "signPassword"), "sign_password"),
             thinking_enabled=thinking_enabled,
             reasoning_effort=reasoning_effort,
+        )
+
+
+@dataclass(frozen=True)
+class CheatCatalogRequest:
+    """Validated input for the translated-label preflight job."""
+
+    source: Path
+    confirm: bool
+    api_key: str | None = field(repr=False)
+    thinking_enabled: bool = DEFAULT_TRANSLATION_THINKING_ENABLED
+    reasoning_effort: str = DEFAULT_TRANSLATION_REASONING_EFFORT
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "CheatCatalogRequest":
+        return cls(
+            source=_existing_directory(_payload_value(payload, "source"), "source"),
+            confirm=_payload_bool(payload, "confirm", "confirm_third_party", default=False),
+            api_key=_optional_secret(_payload_value(payload, "api_key", "apiKey"), "api_key"),
+            thinking_enabled=_payload_bool(
+                payload,
+                "thinking_enabled",
+                "thinkingEnabled",
+                default=DEFAULT_TRANSLATION_THINKING_ENABLED,
+            ),
+            reasoning_effort=normalize_reasoning_effort(
+                _payload_value(
+                    payload,
+                    "reasoning_effort",
+                    "reasoningEffort",
+                    default=DEFAULT_TRANSLATION_REASONING_EFFORT,
+                )
+            ),
         )
 
 
@@ -412,12 +467,69 @@ class JobManager:
                 if job.cancel_event.is_set():
                     raise CancelledError("inspection cancelled")
                 language = _translation_profile_for_report(report, job.update_progress)
-                job.set_result({"inspection": _json_safe(report), "translation": language, "buildReady": not report.blocked})
+                job.set_result(
+                    {
+                        "inspection": _json_safe(report),
+                        "translation": language,
+                        "cheatCatalog": _cheat_catalog_for_report(report),
+                        "buildReady": not report.blocked,
+                    }
+                )
                 job.finish_completed("inspection completed" if not report.blocked else "inspection completed with blocking findings")
             except CancelledError:
                 job.finish_cancelled()
             except Exception as exc:  # Errors stay user-visible but never include request secrets.
                 job.finish_failed(str(exc))
+
+        job.future = self._executor.submit(runner)
+        return job
+
+    def submit_cheat_catalog(self, request: CheatCatalogRequest) -> Job:
+        """Translate labels in a source-read-only preflight and return IDs."""
+
+        job = self._new_job("cheat-catalog")
+        secrets_to_redact = (request.api_key,) if request.api_key else ()
+
+        def progress(stage: str, fraction: float, message: str) -> None:
+            job.update_progress(stage, fraction, message, secrets_to_redact)
+
+        def runner() -> None:
+            if not job.mark_running():
+                job.finish_cancelled()
+                return
+            try:
+                service = self._pipeline_factory(
+                    self.tool_root,
+                    progress=progress,
+                    cancel_event=job.cancel_event,
+                )
+                report = service.inspect(request.source)
+                if report.blocked:
+                    raise Game2ApkError("RPG Maker MV inspection did not pass; inspect report is available")
+                needs_translation = service.cheat_labels_need_translation_at(report.www_root)
+                if needs_translation and not request.confirm:
+                    raise ConfigurationError(
+                        "cheat-menu labels require explicit third-party confirmation before sending them to DeepSeek"
+                    )
+                catalog, translation = service.preview_cheat_catalog(
+                    report,
+                    api_key=request.api_key,
+                    confirmed_third_party=request.confirm,
+                    thinking_enabled=request.thinking_enabled,
+                    reasoning_effort=request.reasoning_effort,
+                )
+                result: dict[str, Any] = {
+                    "inspection": _json_safe(report),
+                    "cheatCatalog": catalog,
+                }
+                if translation is not None:
+                    result["cheatTranslation"] = _json_safe(translation)
+                job.set_result(result)
+                job.finish_completed("advanced cheat variable labels are ready")
+            except CancelledError:
+                job.finish_cancelled()
+            except Exception as exc:
+                job.finish_failed(str(exc), secrets_to_redact)
 
         job.future = self._executor.submit(runner)
         return job
@@ -984,6 +1096,11 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/api/inspect":
                 source = _existing_directory(_payload_value(payload, "source"), "source")
                 job = self._jobs().submit_inspect(source)
+                self._json({"job": job.to_public()}, 202)
+                return
+            if path == "/api/cheat-catalog":
+                request = CheatCatalogRequest.from_payload(payload)
+                job = self._jobs().submit_cheat_catalog(request)
                 self._json({"job": job.to_public()}, 202)
                 return
             if path == "/api/build":

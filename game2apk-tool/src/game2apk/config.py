@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .cheat_catalog import normalize_advanced_cheat_variable_ids
 from .errors import ConfigurationError
 from .models import BuildConfig
 from .security import assert_no_secrets, atomic_write_json
@@ -59,6 +60,7 @@ def build_config(
     version_name: str = "1.3.0",
     icon_path: str | None = None,
     control: dict[str, Any] | None = None,
+    advanced_cheat_variable_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     control_data = control if control is not None else default_control_config()
     validate_control_config(control_data)
@@ -77,6 +79,9 @@ def build_config(
         "versionCode": int(version_code),
         "versionName": version_name,
         "control": control_data,
+        "advancedCheatVariableIds": normalize_advanced_cheat_variable_ids(
+            advanced_cheat_variable_ids
+        ),
     }
     if icon_path:
         data["iconName"] = Path(icon_path).name

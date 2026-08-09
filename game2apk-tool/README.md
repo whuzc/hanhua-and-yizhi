@@ -1,6 +1,6 @@
 # game2apk-tool
 
-当前发布候选为工具 `v1.3.10`；生成 APK 默认 versionCode `8`、versionName `1.3.0`（由 7/1.2.0 升级），包含动态作弊菜单、可逆无敌、战斗胜负控制、事件回想传送、加密音频修复，以及签名产物命名、日文作弊标签简体中文文档翻译和正文截断恢复。
+当前发布候选为工具 `v1.3.11`；生成 APK 默认 versionCode `8`、versionName `1.3.0`（由 7/1.2.0 升级），包含动态作弊菜单、可逆无敌、战斗胜负控制、事件回想传送、加密音频修复，以及签名产物命名、日文作弊标签简体中文文档翻译、正文上下文 TXT 翻译和高级作弊变量选择。
 
 Windows 本地工具：检查 RPG Maker MV、在受标记的 `.work` 副本中暂存和补丁、可选离线翻译、Gradle 构建、稳定签名并做 APK 静态验收。原游戏目录只读；本项目不生成 AAB。
 
@@ -68,13 +68,13 @@ portable 不得包含原游戏、存档、APK、AAB、keystore、DPAPI 文件或
 - **工具链自动发现**：启动时优先读取已存在的 `ANDROID_SDK_ROOT`、`ANDROID_HOME`、`JAVA_HOME`、`PATH`、Android Studio 默认目录和用户配置；如果本机已有 Android 工具，会直接调用，不重复安装。缺少组件时仅在用户点击下载并确认后访问官方 HTTPS 地址，安装目录由用户选择。Command-line Tools 下载后仍需用户用 `sdkmanager` 或 Android Studio 安装项目所需的 platform/build-tools/platform-tools；工具不会静默接受许可证。
 - **可选 DeepSeek 翻译**：默认不联网、不翻译。勾选强制翻译并明确确认第三方传输后，使用环境变量名、stdin 或隐藏 prompt 提供 Key；Key 不出现在 argv、日志、报告、APK 或 portable。建议先备份并逐段审阅机器翻译结果。
 
-翻译默认使用官方模型 `deepseek-v4-flash`（输入 `v4flash` / `v4-flash` 会自动规范化），默认开启 thinking 并使用 `high` 强度；界面可切换关闭 thinking，或选择 `low / high / max`，以在自然度和速度之间取舍。默认每批 20 个文本块、最多 4 路并发，并启用相同文本去重、翻译缓存和限流重试。RPG Maker MV 的连续对话行会作为一个完整消息块交给模型，按上下文翻译并保留行数/顺序，不会按单词逐个翻译。可用 `GAME2APK_TRANSLATION_CONCURRENCY`（1–8）与 `GAME2APK_TRANSLATION_BATCH_SIZE`（1–100）按账号限流情况调整；高级作弊标签另有 24 条/2 路并发上限，并在响应过大时自动拆分恢复。完整策略与取舍见 [docs/translation-performance.md](../docs/translation-performance.md)。
+翻译默认使用官方模型 `deepseek-v4-flash`（输入 `v4flash` / `v4-flash` 会自动规范化），默认开启 thinking 并使用 `high` 强度；界面可切换关闭 thinking，或选择 `low / high / max`，以在自然度和速度之间取舍。正文默认按最多 60 个逻辑文本块或约 12,000 个源字符整合为一次 TXT/TSV 请求、最多 4 路并发，并启用相同文本去重、翻译缓存和限流重试。RPG Maker MV 的连续对话行会作为一个完整消息块，相邻事件/记录以明确上下文边界分组，按上下文翻译并保留 ID、段数与顺序，不会按单词逐个翻译。可用 `GAME2APK_TRANSLATION_CONCURRENCY`（1–8）、`GAME2APK_TRANSLATION_BATCH_SIZE`（1–100，正文仍最多 60）和 `GAME2APK_TRANSLATION_DOCUMENT_CHARS`（1,000–48,000，建议保持默认 12,000）按账号限流情况调整；高级作弊标签另有 24 条/2 路并发上限，并在响应过大时自动拆分恢复。完整策略与取舍见 [docs/translation-performance.md](../docs/translation-performance.md)。
 - **签名与静态验收**：沿用固定 `applicationId=com.game2apk.xianyaoshengcanver22`、`versionCode=8`、`versionName=1.3.0` 的升级身份，自动完成 zipalign/apksigner/manifest/资源清单等静态检查；没有连接手机时不会宣称已完成实机验证。
 - **手机输入契约**：悬浮层保留确认、取消、ESC、立绘和四向方向键；方向键按住持续、抬起立即释放。单指点击游戏区保持 MV 原触摸语义（选项、地图目的地、dash、NPC/事件互动），单指长按加速文本；双指轻点发送一次返回/取消，三指和多余触点被忽略。悬浮层可以隐藏，避免遮挡原游戏。
 - **内置作弊器**：右上角入口可打开金币 `999999999`、角色字段编辑（等级、经验、HP/MP、基础参数及游戏存在的淫欲等扩展字段）、免费物品商店、无敌、回想房间传送、战斗强制胜利/失败。高级菜单在游戏运行时读取 `$dataSystem.variables`、`switches` 和 `$dataMapInfos`，按游戏原名自动生成变量/开关/回想候选并用关键词标注欲望、感度、成长、关系等类别；没有命名的变量不会被全部暴露，而是保留通用白名单回退。语义识别是候选提示，不会猜测未命名插件内部字段，也不保证不同游戏的同名变量含义相同。免费商店不做购买限额保护，仅提示按需购买；无敌开启时保存当前 HP/攻击/防御快照，关闭时按角色当前正常值恢复而不是覆盖升级后新值。作弊可能破坏事件、数值或存档，请复制存档后按需使用。
 - **存档升级契约**：应用升级必须保持同一 `applicationId` 和同一签名证书，并使用 `adb install -r` 或系统覆盖安装；不要卸载、清除数据或更换签名。WebView 的 localStorage、RPG Maker 存档和设置因此可以保留。新版本只增加兼容字段，不主动删除用户存档。
 
-翻译筛选规则：正文翻译只会把含非中文文本的消息块作为候选；纯中文正文不会发送到 API，也不会被改写。中英混合正文仍按完整对话提交以保留上下文，但原有汉字会被保护并原样恢复。作弊菜单是例外：只要检测到日文标签，实际显示的变量/开关标签会整合为一个带 ID 的 TXT/TSV 文档，返回结果写入另一个 TXT 后按 ID 回写；英文/代码标识保留，较长日文内容必须翻译，助词有明确例外。检查报告会分别显示正文候选数量、作弊标签状态和实际 API 请求数。
+翻译筛选规则：正文翻译只会把含非中文文本的消息块作为候选；纯中文正文不会发送到 API，也不会被改写。中英混合正文仍按完整对话提交以保留上下文，但原有汉字和 MV 控制符会被保护并原样恢复。正文源文档、结果文档分别保存为 `.state/body-translation-source.txt` 与 `.state/body-translation-result.txt`，实际分批请求/响应也保存在 `.state/body-translation-batches/`，响应从 UTF-8 结果文件重新读取、校验后才按 ID 回写。作弊菜单标签使用独立的严格 TXT/TSV 文档流程；英文/代码标识保留，较长日文内容必须翻译，助词有明确例外。上述 `.state` 文本可能包含游戏内容，只供本地审阅，不能随 Release 发布。检查报告会分别显示正文候选数量、作弊标签状态和实际 API 请求数。
 
 正文翻译组和作弊标签组不再使用失败率阈值阻止产物生成：任何失败块都保留原文并写入报告/TXT，已成功部分照常进入 APK。报告字段 `failureCount`、`failureRatio`、`continuedWithFailures` 会明确记录该决定；只有配置、授权、取消、Gradle、签名或静态验收错误会阻止生成。
 

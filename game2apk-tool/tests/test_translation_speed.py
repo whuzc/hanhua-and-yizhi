@@ -11,6 +11,8 @@ from tempfile import TemporaryDirectory
 from game2apk.errors import CancelledError, TranslationError
 from game2apk.models import TranslationEntry
 from game2apk.translation import (
+    BODY_DOCUMENT_MAX_ENTRIES,
+    BODY_DOCUMENT_MAX_SOURCE_CHARS,
     CHEAT_VISIBLE_SWITCH_LIMIT,
     CHEAT_VISIBLE_VARIABLE_LIMIT,
     CHEAT_LABEL_PROMPT_VERSION,
@@ -129,7 +131,7 @@ class _SizeLimitedStrictTransport(_StrictChineseLabelTransport):
 
 
 class _SizeLimitedBodyTransport(_ParallelTransport):
-    """Simulate a body-text provider that truncates large JSON batches."""
+    """Simulate a body-text provider that truncates large TXT documents."""
 
     def __init__(self, limit: int = 4) -> None:
         super().__init__()
@@ -138,24 +140,48 @@ class _SizeLimitedBodyTransport(_ParallelTransport):
 
     def chat(self, payload: dict, api_key: str) -> dict:
         prompt = payload["messages"][-1]["content"]
-        items = json.loads(prompt.split("INPUT=", 1)[1])
+        document = prompt.split("SOURCE_DOCUMENT_BEGIN\n", 1)[1].split("SOURCE_DOCUMENT_END", 1)[0]
+        rows = [
+            line.split("\t", 2)
+            for line in document.splitlines()
+            if line and not line.startswith("CONTEXT_")
+        ]
+        item_ids = list(dict.fromkeys(row[0] for row in rows))
         with self.lock:
             self.calls.append(payload)
-            self.max_items = max(self.max_items, len(items))
-        if len(items) > self.limit:
+            self.max_items = max(self.max_items, len(item_ids))
+        if len(item_ids) > self.limit:
             raise TranslationError("DeepSeek response was not complete: length")
-        translated = [
-            {"id": item["id"], "segments": [f"{segment} [zh]" for segment in item["segments"]]}
-            for item in items
-        ]
+        translated = "\n".join(
+            f"{item_id}\t{segment_marker}\t{source} [zh]"
+            for item_id, segment_marker, source in rows
+        )
         return {
             "choices": [
                 {
                     "finish_reason": "stop",
-                    "message": {"content": json.dumps({"translations": translated}, ensure_ascii=False)},
+                    "message": {"content": translated},
                 }
             ]
         }
+
+
+class _BodyDocumentTransport(_SizeLimitedBodyTransport):
+    def __init__(self) -> None:
+        super().__init__(limit=10_000)
+
+
+class _BodyDocumentDropsOneTransport(_BodyDocumentTransport):
+    def __init__(self, dropped_text: str) -> None:
+        super().__init__()
+        self.dropped_text = dropped_text
+
+    def chat(self, payload: dict, api_key: str) -> dict:
+        response = super().chat(payload, api_key)
+        content = response["choices"][0]["message"]["content"]
+        rows = [line for line in content.splitlines() if self.dropped_text not in line]
+        response["choices"][0]["message"]["content"] = "\n".join(rows)
+        return response
 
 
 class _RepairOnRetryTransport:
@@ -319,6 +345,202 @@ class TranslationSpeedTests(unittest.TestCase):
             self.assertGreater(transport.max_items, 4)
             self.assertTrue(any(payload["thinking"] == {"type": "disabled"} for payload in transport.calls))
             self.assertGreater(len(transport.calls), 1)
+
+    def test_body_text_uses_sixty_block_documents_and_local_review_files(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            www = root / "www"
+            (www / "data").mkdir(parents=True)
+            commands = []
+            for index in range(120):
+                commands.extend(
+                    [
+                        {"code": 101, "parameters": ["", 0, 0, 2]},
+                        {"code": 401, "parameters": [f"Dialogue {index}"]},
+                    ]
+                )
+            (www / "data" / "Map001.json").write_text(
+                json.dumps({"events": [None, {"pages": [{"list": commands}]}]}),
+                encoding="utf-8",
+            )
+            transport = _BodyDocumentTransport()
+            report = TranslationService().translate(
+                www,
+                api_key="not-a-real-key",
+                transport=transport,
+                memory_path=root / "memory.json",
+                confirmed_third_party=True,
+                force=True,
+                max_concurrency=1,
+            )
+
+            self.assertEqual(report.entries_applied, 120)
+            self.assertEqual(report.api_requests, 2)
+            self.assertEqual(len(transport.calls), 2)
+            for payload in transport.calls:
+                self.assertNotIn("response_format", payload)
+                prompt = payload["messages"][-1]["content"]
+                self.assertIn("CONTEXT_BEGIN", prompt)
+                document = prompt.split("SOURCE_DOCUMENT_BEGIN\n", 1)[1].split("SOURCE_DOCUMENT_END", 1)[0]
+                content_ids = {
+                    line.split("\t", 1)[0]
+                    for line in document.splitlines()
+                    if line and not line.startswith("CONTEXT_")
+                }
+                self.assertLessEqual(len(content_ids), BODY_DOCUMENT_MAX_ENTRIES)
+            self.assertTrue(report.document_source_path)
+            self.assertTrue(report.document_result_path)
+            self.assertEqual(Path(report.document_source_path).name, "body-translation-source.txt")
+            self.assertEqual(Path(report.document_result_path).name, "body-translation-result.txt")
+            source_rows = [
+                line
+                for line in Path(report.document_source_path).read_text(encoding="utf-8").splitlines()
+                if line and not line.startswith("CONTEXT_")
+            ]
+            result_rows = [
+                line
+                for line in Path(report.document_result_path).read_text(encoding="utf-8").splitlines()
+                if line and not line.startswith("CONTEXT_")
+            ]
+            self.assertEqual(len(source_rows), 120)
+            self.assertEqual(len(result_rows), 120)
+            batch_artifacts = sorted((root / "body-translation-batches").glob("*.txt"))
+            self.assertEqual(len(batch_artifacts), 4)
+            self.assertTrue(all(path.read_text(encoding="utf-8") for path in batch_artifacts))
+            self.assertNotIn(
+                "not-a-real-key",
+                "\n".join(path.read_text(encoding="utf-8") for path in batch_artifacts),
+            )
+
+    def test_body_document_keeps_event_contexts_separate_and_segments_ordered(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            www = root / "www"
+            (www / "data").mkdir(parents=True)
+
+            def event(prefix: str) -> dict:
+                commands = []
+                for index in range(4):
+                    commands.extend(
+                        [
+                            {"code": 101, "parameters": ["", 0, 0, 2, f"{prefix} speaker"]},
+                            {"code": 401, "parameters": [f"{prefix} line {index} A \\V[1] 中文"]},
+                            {"code": 401, "parameters": [f"{prefix} line {index} B"]},
+                        ]
+                    )
+                return {"pages": [{"list": commands}]}
+
+            (www / "data" / "Map001.json").write_text(
+                json.dumps({"events": [None, event("first"), event("second")]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            transport = _BodyDocumentTransport()
+            report = TranslationService().translate(
+                www,
+                api_key="not-a-real-key",
+                transport=transport,
+                memory_path=root / "memory.json",
+                confirmed_third_party=True,
+                force=True,
+                max_concurrency=1,
+            )
+
+            self.assertEqual(report.entries_total, 16)
+            self.assertEqual(report.entries_applied, 16)
+            self.assertEqual(len(transport.calls), 1)
+            prompt = transport.calls[0]["messages"][-1]["content"]
+            self.assertEqual(prompt.count("CONTEXT_BEGIN\t"), 2)
+            self.assertIn("do not blend information across contexts", prompt)
+            data = json.loads((www / "data" / "Map001.json").read_text(encoding="utf-8"))
+            first_lines = [
+                command["parameters"][0]
+                for command in data["events"][1]["pages"][0]["list"]
+                if command["code"] == 401
+            ]
+            self.assertEqual(len(first_lines), 8)
+            self.assertEqual(first_lines[0], "first line 0 A \\V[1] 中文 [zh]")
+            self.assertEqual(first_lines[1], "first line 0 B [zh]")
+
+    def test_body_document_character_cap_splits_before_provider_request(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            www = root / "www"
+            (www / "data").mkdir(parents=True)
+            commands = []
+            for index in range(16):
+                commands.extend(
+                    [
+                        {"code": 101, "parameters": ["", 0, 0, 2]},
+                        {"code": 401, "parameters": [f"Long {index} " + ("x" * 1_400)]},
+                    ]
+                )
+            (www / "data" / "Map001.json").write_text(
+                json.dumps({"events": [None, {"pages": [{"list": commands}]}]}),
+                encoding="utf-8",
+            )
+            transport = _BodyDocumentTransport()
+            report = TranslationService().translate(
+                www,
+                api_key="not-a-real-key",
+                transport=transport,
+                memory_path=root / "memory.json",
+                confirmed_third_party=True,
+                force=True,
+                max_concurrency=1,
+            )
+
+            self.assertEqual(report.entries_applied, 16)
+            self.assertEqual(len(transport.calls), 2)
+            for payload in transport.calls:
+                prompt = payload["messages"][-1]["content"]
+                document = prompt.split("SOURCE_DOCUMENT_BEGIN\n", 1)[1].split("SOURCE_DOCUMENT_END", 1)[0]
+                source_chars = sum(
+                    len(line.split("\t", 2)[2])
+                    for line in document.splitlines()
+                    if line and not line.startswith("CONTEXT_")
+                )
+                self.assertLessEqual(source_chars, BODY_DOCUMENT_MAX_SOURCE_CHARS)
+
+    def test_body_document_retains_only_the_individually_malformed_block(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            www = root / "www"
+            (www / "data").mkdir(parents=True)
+            commands = []
+            for text in ["One", "Two", "Three", "DROP ME", "Five", "Six", "Seven", "Eight"]:
+                commands.extend(
+                    [
+                        {"code": 101, "parameters": ["", 0, 0, 2]},
+                        {"code": 401, "parameters": [text]},
+                    ]
+                )
+            (www / "data" / "Map001.json").write_text(
+                json.dumps({"events": [None, {"pages": [{"list": commands}]}]}),
+                encoding="utf-8",
+            )
+            transport = _BodyDocumentDropsOneTransport("DROP ME")
+            report = TranslationService().translate(
+                www,
+                api_key="not-a-real-key",
+                transport=transport,
+                memory_path=root / "memory.json",
+                confirmed_third_party=True,
+                force=True,
+                max_concurrency=1,
+            )
+
+            self.assertEqual(report.entries_total, 8)
+            self.assertEqual(report.entries_applied, 7)
+            self.assertEqual(len(report.failures), 1)
+            data = json.loads((www / "data" / "Map001.json").read_text(encoding="utf-8"))
+            values = [
+                command["parameters"][0]
+                for command in data["events"][1]["pages"][0]["list"]
+                if command["code"] == 401
+            ]
+            self.assertEqual(values[3], "DROP ME")
+            self.assertEqual(values[0], "One [zh]")
+            self.assertEqual(values[-1], "Eight [zh]")
 
     def test_cheat_label_scope_translates_system_labels_without_dialogue(self) -> None:
         with TemporaryDirectory() as temporary:

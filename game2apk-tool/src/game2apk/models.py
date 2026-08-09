@@ -225,8 +225,8 @@ class TranslationReport:
     source_entries_total: int | None = None
     entries_skipped_chinese: int = 0
     entries_skipped_non_text: int = 0
-    # Strict cheat-label document mode writes a local source/result text file
-    # and records how many provider calls were actually made.  These paths
+    # Compact body/cheat-label document modes write a local source/result text
+    # file and record how many provider calls were actually made. These paths
     # never contain API credentials; they are only local translation artifacts.
     api_requests: int = 0
     document_source_path: str | None = None
@@ -279,6 +279,10 @@ class BuildConfig:
     version_name: str
     icon_path: str | None = None
     control_config: dict[str, Any] = field(default_factory=dict)
+    # ``None`` keeps the historical runtime behavior (all discoverable named
+    # variables). An explicit list, including ``[]``, is the user's advanced
+    # cheat-menu selection and is validated again against staged System.json.
+    advanced_cheat_variable_ids: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -288,6 +292,11 @@ class BuildConfig:
             "versionName": self.version_name,
             "iconPath": self.icon_path,
             "control": self.control_config,
+            "advancedCheatVariableIds": (
+                list(self.advanced_cheat_variable_ids)
+                if self.advanced_cheat_variable_ids is not None
+                else None
+            ),
         }
 
 

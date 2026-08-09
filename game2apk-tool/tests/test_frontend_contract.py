@@ -191,6 +191,30 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("自动跟随最新进度", js)
         self.assertIn("已暂停自动滚动", js)
 
+    def test_advanced_cheat_variable_selector_uses_stable_ids(self) -> None:
+        html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+        css = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+        js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('data-section="cheat-variables"', html)
+        self.assertIn('id="prepare-cheat-variables"', html)
+        self.assertIn('id="cheat-variable-search"', html)
+        self.assertIn('id="select-all-cheat-variables"', html)
+        self.assertIn('id="clear-cheat-variables"', html)
+        self.assertIn('aria-live="polite"', html)
+        self.assertIn('/api/cheat-catalog', js)
+        self.assertIn('result.cheatCatalog', js)
+        self.assertIn('payload.advancedCheatVariableIds', js)
+        self.assertIn('selectedCheatVariableIds = new Set', js)
+        self.assertIn(': new Set(nextIds)', js)
+        self.assertIn('默认全部加入', js)
+        self.assertIn('row.dataset.variableId = item.id', js)
+        self.assertIn('item.translatedLabel', js)
+        self.assertIn('item.sourceLabel', js)
+        self.assertIn('kind !== "variable"', js)
+        self.assertIn('min-height: 44px', css)
+        self.assertIn('@media (hover: hover) and (pointer: fine)', css)
+        self.assertIn('@media (prefers-reduced-motion: reduce)', css)
+
     def test_health_declares_gradle_user_home_as_shared(self) -> None:
         import sys
 

@@ -22,6 +22,12 @@
 
 构建器在副本中复制 `www` 和 `assets/game2apk/config.json`，会忽略模板的 `.gradle`、`.gradle-home`、`build`、`dist`、keystore 和 APK 文件，防止旧产物混入。
 
+## 高级作弊变量选择契约
+
+检查任务的 `result.cheatCatalog` 只公开 `data/System.json` 中前 256 个非空变量的稳定 ID 和标签，ID 格式为 `variable:N`。`POST /api/cheat-catalog` 使用与构建相同的 DeepSeek 思考设置，在一次性的 `System.json` 副本中翻译标签，返回 `status: ready` 的同一组 ID；源游戏文件不会被写入，翻译缓存可供之后的正式构建复用。
+
+`POST /api/build` 接受 `advancedCheatVariableIds`。省略或传 `null` 表示兼容旧版行为——显示全部可发现变量；显式 `[]` 表示不显示任何高级数值变量。其他数组会去重并按变量编号排序，在 patch 阶段还必须属于暂存 `System.json` 的前 256 个非空变量，否则拒绝构建。开关目录不受该字段影响。选择会进入 prepared-stage resume key，变更选择不会复用旧的注入结果。
+
 ## 测试策略
 
 优先运行：
@@ -36,4 +42,3 @@ python -m unittest discover -s .\game2apk-tool\tests -p 'test_*.py' -v
 ## 便携构建
 
 `scripts/game2apk.spec` 只收集 Python 标准库应用和 Tkinter GUI；`scripts/build-portable.ps1` 先运行单元测试，再调用 PyInstaller 生成目录。构建产物不把 `.state`、`.work`、模板资产、游戏目录、签名材料或环境变量复制进去。
-
