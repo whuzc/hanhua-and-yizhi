@@ -34,6 +34,11 @@ from .models import BuildConfig
 from .pipeline import PipelineService
 from .security import now_utc, redact_text
 from .toolchain import COMPONENTS, discover_configured, download_component, load_config, missing_components, save_config
+from .translation import (
+    DEFAULT_TRANSLATION_REASONING_EFFORT,
+    DEFAULT_TRANSLATION_THINKING_ENABLED,
+    normalize_reasoning_effort,
+)
 
 
 MAX_REQUEST_BYTES = 128 * 1024
@@ -125,6 +130,8 @@ class BuildRequest:
     confirm: bool
     api_key: str | None = field(repr=False)
     sign_password: str | None = field(repr=False)
+    thinking_enabled: bool = DEFAULT_TRANSLATION_THINKING_ENABLED
+    reasoning_effort: str = DEFAULT_TRANSLATION_REASONING_EFFORT
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any], tool_root: Path) -> "BuildRequest":
@@ -161,6 +168,15 @@ class BuildRequest:
         confirm = _payload_bool(payload, "confirm", "confirm_third_party", default=False)
         if translate and not confirm:
             raise ConfigurationError("translation requires explicit third-party confirmation")
+        thinking_enabled = _payload_bool(
+            payload,
+            "thinking_enabled",
+            "thinkingEnabled",
+            default=DEFAULT_TRANSLATION_THINKING_ENABLED,
+        )
+        reasoning_effort = normalize_reasoning_effort(
+            _payload_value(payload, "reasoning_effort", "reasoningEffort", default=DEFAULT_TRANSLATION_REASONING_EFFORT)
+        )
         return cls(
             source=source,
             template=template,
@@ -169,6 +185,8 @@ class BuildRequest:
             confirm=confirm,
             api_key=_optional_secret(_payload_value(payload, "api_key", "apiKey"), "api_key"),
             sign_password=_optional_secret(_payload_value(payload, "sign_password", "signPassword"), "sign_password"),
+            thinking_enabled=thinking_enabled,
+            reasoning_effort=reasoning_effort,
         )
 
 
@@ -366,6 +384,8 @@ class JobManager:
                         api_key=request.api_key,
                         confirmed_third_party=True,
                         force=True,
+                        thinking_enabled=request.thinking_enabled,
+                        reasoning_effort=request.reasoning_effort,
                     )
                     if job.cancel_event.is_set():
                         raise CancelledError("build cancelled")

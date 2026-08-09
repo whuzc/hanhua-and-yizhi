@@ -13,7 +13,12 @@ from .errors import Game2ApkError
 from .models import BuildConfig
 from .pipeline import PipelineService, stage_manifest_from_dict
 from .security import read_secret_source, redact_text
-from .translation import DEFAULT_TRANSLATION_MODEL
+from .translation import (
+    DEFAULT_TRANSLATION_MODEL,
+    DEFAULT_TRANSLATION_REASONING_EFFORT,
+    DEFAULT_TRANSLATION_THINKING_ENABLED,
+    TRANSLATION_REASONING_EFFORTS,
+)
 from .verifier import VerificationService
 
 
@@ -129,6 +134,21 @@ def _common_build_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--icon")
 
 
+def _translation_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--thinking-mode",
+        choices=("enabled", "disabled"),
+        default="enabled" if DEFAULT_TRANSLATION_THINKING_ENABLED else "disabled",
+        help="translation thinking mode (default: enabled; disabled is faster)",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=TRANSLATION_REASONING_EFFORTS,
+        default=DEFAULT_TRANSLATION_REASONING_EFFORT,
+        help="V4 Flash effort when thinking is enabled (low, high, max; default: high)",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = SafeArgumentParser(
         prog="game2apk-tool",
@@ -158,6 +178,7 @@ def build_parser() -> argparse.ArgumentParser:
     translate_parser.add_argument("--target-language", default="zh-CN")
     translate_parser.add_argument("--force", action="store_true")
     translate_parser.add_argument("--confirm-third-party", action="store_true")
+    _translation_arguments(translate_parser)
     _add_secret_source_options(translate_parser, "api_key", default_env="DEEPSEEK_API_KEY")
 
     build_parser_ = sub.add_parser("build", help="render template and run assembleRelease")
@@ -185,6 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--template", required=True)
     run_parser.add_argument("--force-translation", action="store_true")
     run_parser.add_argument("--confirm-third-party", action="store_true")
+    _translation_arguments(run_parser)
     _add_secret_source_options(run_parser, "api_key", default_env="DEEPSEEK_API_KEY")
     _add_secret_source_options(run_parser, "sign_password")
     run_parser.add_argument("--adb-install", action="store_true")
@@ -231,6 +253,8 @@ def main(argv: list[str] | None = None) -> int:
                     api_key=api_key,
                     confirmed_third_party=args.confirm_third_party,
                     force=args.force,
+                    thinking_enabled=args.thinking_mode == "enabled",
+                    reasoning_effort=args.reasoning_effort,
                     memory_path=Path(args.root) / ".state" / "translation-memory.json",
                 )
             )
@@ -288,6 +312,8 @@ def main(argv: list[str] | None = None) -> int:
                     api_key=api_key,
                     confirmed_third_party=args.confirm_third_party,
                     force=args.force_translation,
+                    thinking_enabled=args.thinking_mode == "enabled",
+                    reasoning_effort=args.reasoning_effort,
                 )
             result = service.build(args.template, stage, config, api_key=api_key)
             if result.return_code != 0 or not result.apk_path:

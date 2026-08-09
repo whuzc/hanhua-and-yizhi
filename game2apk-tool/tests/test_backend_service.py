@@ -253,6 +253,28 @@ class BackendServiceTests(unittest.TestCase):
             self.root,
         )
         self.assertNotIn("do-not-print-me", repr(request))
+        self.assertTrue(request.thinking_enabled)
+        self.assertEqual(request.reasoning_effort, "high")
+        custom = BuildRequest.from_payload(
+            {
+                "source": str(self.source),
+                "template": str(self.template),
+                "thinking_enabled": False,
+                "reasoning_effort": "max",
+            },
+            self.root,
+        )
+        self.assertFalse(custom.thinking_enabled)
+        self.assertEqual(custom.reasoning_effort, "max")
+        with self.assertRaises(ConfigurationError):
+            BuildRequest.from_payload(
+                {
+                    "source": str(self.source),
+                    "template": str(self.template),
+                    "reasoning_effort": "medium",
+                },
+                self.root,
+            )
 
     def test_toolchain_download_requires_confirmation_and_saves_selected_path(self) -> None:
         status, payload = self._post(

@@ -64,6 +64,10 @@ h1 { font-size: 18px; line-height: 1.1; letter-spacing: -.02em; } h1 span { colo
 .template-field { margin-top: 13px; }
 .secret-options { margin-top: 9px; padding: 10px; border: 1px solid rgba(105,181,160,.16); border-radius: 14px; background: rgba(255,255,255,.30); }
 .secret-options .field-label { margin-top: 10px; }
+.translation-tuning { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 10px; }
+.translation-tuning .text-field { min-height: 34px; padding-block: 7px; }
+.field-hint { display: block; margin-top: 8px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+@media (max-width: 680px) { .translation-tuning { grid-template-columns: 1fr; } }
 .secret-label { margin-top: 12px; }
 .progress-meta { display: flex; align-items: center; justify-content: space-between; margin-top: 13px; color: var(--muted); font-size: 11px; font-weight: 700; }
 .report-log { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 8px; padding: 10px; }

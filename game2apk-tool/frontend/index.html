@@ -68,6 +68,22 @@
           <label class="check-row"><input id="translate-toggle" type="checkbox" /> <span>使用 DeepSeek 翻译未汉化文本</span></label>
           <div id="translation-options" class="secret-options" hidden>
             <label class="check-row"><input id="translation-confirm" type="checkbox" /> <span>我确认会向第三方 DeepSeek 发送待翻译文本</span></label>
+            <div class="translation-tuning">
+              <label class="field-label" for="translation-thinking">思考模式
+                <select id="translation-thinking" class="text-field">
+                  <option value="enabled" selected>开启（语境更自然，速度较慢）</option>
+                  <option value="disabled">关闭（速度优先）</option>
+                </select>
+              </label>
+              <label class="field-label" for="translation-effort">思考强度
+                <select id="translation-effort" class="text-field">
+                  <option value="low">low（较快）</option>
+                  <option value="high" selected>high（推荐）</option>
+                  <option value="max">max（最强，最慢）</option>
+                </select>
+              </label>
+            </div>
+            <small id="translation-thinking-hint" class="field-hint">开启思考模式会使用 DeepSeek V4 Flash 的推理预算；强度越高，通常越自然但耗时越长。</small>
             <label class="field-label" for="deepseek-key">DeepSeek Key（仅本次请求）</label>
             <input id="deepseek-key" class="text-field" type="password" autocomplete="off" />
           </div>

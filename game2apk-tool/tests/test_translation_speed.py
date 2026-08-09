@@ -81,7 +81,7 @@ class TranslationSpeedTests(unittest.TestCase):
         )
         return www
 
-    def test_v4_flash_non_thinking_parallel_and_duplicate_reuse(self) -> None:
+    def test_v4_flash_thinking_parallel_and_duplicate_reuse(self) -> None:
         with TemporaryDirectory() as temporary:
             www = self._www(Path(temporary))
             transport = _ParallelTransport()
@@ -103,12 +103,38 @@ class TranslationSpeedTests(unittest.TestCase):
             self.assertGreaterEqual(transport.max_active, 2)
             for payload in transport.calls:
                 self.assertEqual(payload["model"], DEFAULT_TRANSLATION_MODEL)
-                self.assertEqual(payload["thinking"], {"type": "disabled"})
+                self.assertEqual(payload["thinking"], {"type": "enabled"})
+                self.assertEqual(payload["reasoning_effort"], "high")
+                self.assertGreaterEqual(payload["max_tokens"], 2048)
                 self.assertEqual(payload["response_format"], {"type": "json_object"})
+                prompt = payload["messages"][-1]["content"]
+                self.assertIn("one coherent dialogue or text block", prompt)
+                self.assertIn("never translate word-by-word", prompt)
+                self.assertIn("line boundary", prompt)
 
             data = json.loads((www / "data" / "Map001.json").read_text(encoding="utf-8"))
             values = [command["parameters"][0] for command in data["events"][1]["pages"][0]["list"] if command["code"] == 401]
             self.assertEqual(values, ["One [zh]", "Two [zh]", "Repeat [zh]", "Repeat [zh]", "Five [zh]", "Six [zh]"])
+
+    def test_disabled_thinking_omits_reasoning_effort(self) -> None:
+        with TemporaryDirectory() as temporary:
+            www = self._www(Path(temporary))
+            transport = _ParallelTransport()
+            TranslationService().translate(
+                www,
+                api_key="not-a-real-key",
+                transport=transport,
+                memory_path=Path(temporary) / "memory.json",
+                confirmed_third_party=True,
+                force=True,
+                batch_size=100,
+                max_concurrency=1,
+                thinking_enabled=False,
+            )
+            self.assertTrue(transport.calls)
+            for payload in transport.calls:
+                self.assertEqual(payload["thinking"], {"type": "disabled"})
+                self.assertNotIn("reasoning_effort", payload)
 
     def test_model_aliases_normalize_to_official_identifier(self) -> None:
         self.assertEqual(normalize_model("v4flash"), DEFAULT_TRANSLATION_MODEL)

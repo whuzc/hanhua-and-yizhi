@@ -20,6 +20,12 @@
 
 CLI 不接受秘密值作为 argv。DeepSeek 只能用明确的环境变量名（如 `--api-key-env DEEPSEEK_API_KEY`）、stdin 或隐藏 prompt；签名密码优先使用 applicationId 对应 DPAPI 凭据，standalone 才从 `--password-env NAME`、stdin 或 prompt 取值。子进程只看到 `env:GAME2APK_SIGNING_PASSWORD` 这类变量名，日志、报告、dist、APK 和 portable 不含凭据值。自动化测试使用 FakeTransport，不调用真实 DeepSeek。
 
+## DeepSeek 翻译设置
+
+浏览器前端默认开启 V4 Flash thinking，强度默认 `high`。启用翻译时可选择：`low`（较快）、`high`（推荐平衡）或 `max`（最慢、为复杂语境预留更多推理预算）；也可关闭 thinking 以优先速度。RPG Maker MV 连续对话行按完整消息块发送，模型会结合同一块中的上下文并保持行数与顺序。
+
+命令行 `translate`/`run` 对应使用 `--thinking-mode enabled|disabled` 与 `--reasoning-effort low|high|max`。真实网络翻译前仍需明确确认第三方传输，Key 只通过环境变量名、stdin 或隐藏 prompt 提供。
+
 ## 验收
 
 ```powershell

@@ -205,6 +205,8 @@ class TranslationReport:
     skipped_recommended: bool = False
     live_api_used: bool = False
     report_path: str | None = None
+    thinking_enabled: bool = True
+    reasoning_effort: str = "high"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -220,6 +222,8 @@ class TranslationReport:
             "skippedRecommended": self.skipped_recommended,
             "liveApiUsed": self.live_api_used,
             "reportPath": self.report_path,
+            "thinkingEnabled": self.thinking_enabled,
+            "reasoningEffort": self.reasoning_effort,
         }
 
 

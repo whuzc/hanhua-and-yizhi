@@ -24,13 +24,16 @@ from .security import atomic_write_json, redact_text
 
 PROMPT_VERSION = "mv-safe-v1"
 # DeepSeek V4 Flash is the current fast model used by the optional translation
-# path; requests explicitly select its non-thinking mode. Keep the public
+# path; thinking is configurable and enabled by default. Keep the public
 # spelling (including hyphens) in
 # cache keys and reports: it is the identifier accepted by the OpenAI-compatible
 # DeepSeek endpoint, while ``v4flash`` is accepted below as a convenience alias.
 DEFAULT_TRANSLATION_MODEL = "deepseek-v4-flash"
 DEFAULT_TRANSLATION_BATCH_SIZE = 20
 DEFAULT_TRANSLATION_CONCURRENCY = 4
+DEFAULT_TRANSLATION_THINKING_ENABLED = True
+DEFAULT_TRANSLATION_REASONING_EFFORT = "high"
+TRANSLATION_REASONING_EFFORTS = ("low", "high", "max")
 MAX_TRANSLATION_BATCH_SIZE = 100
 MAX_TRANSLATION_CONCURRENCY = 8
 _TRANSIENT_HTTP_STATUSES = {408, 425, 429, 500, 502, 503, 504}
@@ -66,6 +69,20 @@ def _setting_int(name: str, default: int, minimum: int, maximum: int) -> int:
     except ValueError:
         return default
     return max(minimum, min(maximum, value))
+
+
+def normalize_reasoning_effort(value: str | None) -> str:
+    """Validate the V4 Flash thinking effort accepted by the API."""
+
+    if value is None:
+        return DEFAULT_TRANSLATION_REASONING_EFFORT
+    if not isinstance(value, str):
+        raise ConfigurationError("reasoning_effort must be low, high, or max")
+    normalized = value.strip().casefold()
+    if normalized not in TRANSLATION_REASONING_EFFORTS:
+        choices = ", ".join(TRANSLATION_REASONING_EFFORTS)
+        raise ConfigurationError(f"reasoning_effort must be one of: {choices}")
+    return normalized
 _CONTROL_RE = re.compile(r"\\[A-Za-z]+(?:\[[^\]]*\])?|%\d+|\{\d+\}|\{\{[^{}]+\}\}|<[^>]+>|\\[nrt\\\"']")
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _HIRAGANA_RE = re.compile(r"[\u3040-\u309f]")
@@ -581,7 +598,16 @@ def _parse_translation_json(content: str, expected_ids: set[str]) -> dict[str, l
     return result
 
 
-def _request_batch(transport: TranslationTransport, api_key: str, model: str, target_language: str, entries: list[TranslationEntry], cancel_event=None) -> dict[str, list[str]]:
+def _request_batch(
+    transport: TranslationTransport,
+    api_key: str,
+    model: str,
+    target_language: str,
+    entries: list[TranslationEntry],
+    thinking_enabled: bool,
+    reasoning_effort: str,
+    cancel_event=None,
+) -> dict[str, list[str]]:
     request_items = []
     for entry in entries:
         protected_segments = [protect_text(segment)[0] for segment in entry.segments]
@@ -589,7 +615,10 @@ def _request_batch(transport: TranslationTransport, api_key: str, model: str, ta
     prompt = (
         "Translate only the supplied RPG Maker MV display text into the requested target language. "
         "Return JSON exactly as {\"translations\":[{\"id\":string,\"segments\":string[]}]}. "
-        "Keep every protected marker unchanged and keep each segments array length unchanged. "
+        "Treat every INPUT item as one coherent dialogue or text block: read all of its segments together "
+        "to preserve context, pronouns, tone, and terminology; never translate word-by-word or as unrelated fragments. "
+        "Keep every protected marker unchanged, keep each segments array length and order unchanged, "
+        "and preserve the line boundary of every segment. "
         "Do not translate markers, code, paths, or tags.\n"
         f"TARGET_LANGUAGE={target_language}\nINPUT=" + json.dumps(request_items, ensure_ascii=False)
     )
@@ -600,17 +629,19 @@ def _request_batch(transport: TranslationTransport, api_key: str, model: str, ta
             {"role": "user", "content": prompt},
         ],
         "response_format": {"type": "json_object"},
-        # V4 models default to thinking mode.  Translation is a constrained
-        # JSON transformation, so explicitly selecting non-thinking mode cuts
-        # latency and avoids paying for unused reasoning tokens.
-        "thinking": {"type": "disabled"},
+        # V4 models default to thinking mode. The user can disable it for speed
+        # or select the requested reasoning effort when it is enabled.
+        "thinking": {"type": "enabled" if thinking_enabled else "disabled"},
         "temperature": 0.1,
         "stream": False,
     }
+    if thinking_enabled:
+        payload["reasoning_effort"] = reasoning_effort
     # Keep output bounded to the amount of text requested while leaving room
-    # for JSON punctuation and a modest expansion into the target language.
+    # for JSON punctuation, target-language expansion, and V4 reasoning tokens.
     estimated_chars = sum(len(segment) for entry in entries for segment in entry.segments)
-    payload["max_tokens"] = min(131072, max(512, estimated_chars * 2 + 512))
+    effort_floor = {"low": 1024, "high": 2048, "max": 4096}[reasoning_effort] if thinking_enabled else 512
+    payload["max_tokens"] = min(131072, max(effort_floor, estimated_chars * 2 + 512))
     if cancel_event is not None and cancel_event.is_set():
         raise CancelledError("translation cancelled")
     last_error: Exception | None = None
@@ -689,6 +720,8 @@ class TranslationService:
         force: bool = False,
         batch_size: int = DEFAULT_TRANSLATION_BATCH_SIZE,
         max_concurrency: int = DEFAULT_TRANSLATION_CONCURRENCY,
+        thinking_enabled: bool = DEFAULT_TRANSLATION_THINKING_ENABLED,
+        reasoning_effort: str = DEFAULT_TRANSLATION_REASONING_EFFORT,
     ) -> TranslationReport:
         batch_size = _setting_int(
             "GAME2APK_TRANSLATION_BATCH_SIZE",
@@ -702,6 +735,9 @@ class TranslationService:
             1,
             MAX_TRANSLATION_CONCURRENCY,
         )
+        if not isinstance(thinking_enabled, bool):
+            raise ConfigurationError("thinking_enabled must be true or false")
+        reasoning_effort = normalize_reasoning_effort(reasoning_effort)
         model = normalize_model(model)
         entries = extract_safe_entries(www)
         recommended = recommend_skip_translation(entries)
@@ -713,6 +749,8 @@ class TranslationService:
             entries_total=len(entries),
             entries_applied=0,
             entries_cached=0,
+            thinking_enabled=thinking_enabled,
+            reasoning_effort=reasoning_effort,
             skipped_recommended=recommended and not force,
             live_api_used=False,
         )
@@ -776,6 +814,8 @@ class TranslationService:
                         model,
                         target_language,
                         [group[0] for _key, group in batch],
+                        thinking_enabled,
+                        reasoning_effort,
                         self.cancel_event,
                     )
                     for batch in batches

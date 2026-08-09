@@ -12,6 +12,9 @@
   const progressFill = $("#progress-fill");
   const progressLabel = $("#progress-label");
   const progressValue = $("#progress-value");
+  const thinkingMode = $("#translation-thinking");
+  const reasoningEffort = $("#translation-effort");
+  const thinkingHint = $("#translation-thinking-hint");
   const downloadButtons = [$("#download-android"), $("#download-jdk")];
   const root = document.documentElement;
 
@@ -366,6 +369,8 @@
       version_code: versionCode,
       translate,
       confirm,
+      thinking_enabled: thinkingMode.value === "enabled",
+      reasoning_effort: reasoningEffort.value,
     };
     const template = $("#template-path").value.trim();
     const deepseekKey = $("#deepseek-key").value;
@@ -420,6 +425,18 @@
       if (!currentJobId) buildButton.disabled = true;
     });
     $("#translate-toggle").addEventListener("change", (event) => { $("#translation-options").hidden = !event.target.checked; });
+    const updateThinkingControls = () => {
+      const enabled = thinkingMode.value === "enabled";
+      reasoningEffort.disabled = !enabled;
+      setText(
+        thinkingHint,
+        enabled
+          ? "开启思考模式会使用 DeepSeek V4 Flash 的推理预算；强度越高，通常越自然但耗时越长。"
+          : "已关闭思考模式，使用速度优先的直接翻译；强度设置不会发送给 API。",
+      );
+    };
+    thinkingMode.addEventListener("change", updateThinkingControls);
+    updateThinkingControls();
     await refreshToolchain();
     void heartbeat();
     heartbeatTimer = window.setInterval(() => void heartbeat(), 5000);
