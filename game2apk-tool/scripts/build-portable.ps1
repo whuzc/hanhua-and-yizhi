@@ -27,6 +27,11 @@ if (Test-Path -LiteralPath $templateTarget) {
     Remove-Item -LiteralPath $templateTarget -Recurse -Force
 }
 Copy-Item -LiteralPath $templateSource -Destination $templateTarget -Recurse -Force
+$frontendSource = Join-Path $toolRoot 'frontend'
+$frontendTarget = Join-Path $portableAppRoot 'frontend'
+if (-not (Test-Path -LiteralPath $frontendSource -PathType Container)) { throw "frontend assets are missing: $frontendSource" }
+if (Test-Path -LiteralPath $frontendTarget) { Remove-Item -LiteralPath $frontendTarget -Recurse -Force }
+Copy-Item -LiteralPath $frontendSource -Destination $frontendTarget -Recurse -Force
 
 $artifactDirectoryNames = @('build', '.gradle', '.gradle-home', '.work', '.state', 'dist')
 Get-ChildItem -LiteralPath $templateTarget -Recurse -Directory -Force |

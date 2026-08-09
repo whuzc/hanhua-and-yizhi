@@ -57,10 +57,8 @@ class WizardApp:
         self.root.geometry("1120x820")
         self.root.minsize(920, 680)
         self.root.configure(bg=BACKGROUND)
-        try:
-            self.root.attributes("-alpha", 0.98)
-        except tk.TclError:
-            pass
+        # Keep the client area opaque so Chinese glyphs and thin strokes stay
+        # crisp. The liquid backdrop supplies depth without window-wide alpha.
         apply_windows_backdrop(self.root)
 
         self._backdrop = LiquidBackdrop(self.root)
@@ -79,7 +77,7 @@ class WizardApp:
         GlassButton(source.body, text="浏览…", command=self._browse_source, bg="#dff6ed", fg=MINT_DARK, activebackground="#bdebdc", activeforeground=MINT_DARK).pack(side="left", padx=(0, 8), pady=8)
 
         toolchain = GlassCard(self._backdrop, "00  Android 工具链  ·  Release 不内置")
-        toolchain.place(relx=0.025, rely=0.235, relwidth=0.95, relheight=0.205)
+        toolchain.place(relx=0.025, rely=0.225, relwidth=0.95, relheight=0.25)
         tk.Label(toolchain.body, textvariable=self.toolchain_status_var, bg=GLASS, fg=INK, font=("Segoe UI", 9), anchor="w").grid(row=0, column=0, columnspan=4, sticky="ew", padx=12, pady=(2, 5))
         self._glass_path_row(toolchain.body, 1, "SDK", self.sdk_dir_var, "选择 SDK", "Choose Android SDK directory")
         self._glass_path_row(toolchain.body, 2, "JDK", self.jdk_dir_var, "选择 JDK", "Choose JDK directory")
@@ -90,7 +88,7 @@ class WizardApp:
         GlassButton(toolchain.body, text="下载 JDK 17", command=lambda: self._download_tool("temurin_jdk17"), bg="#dff6ed", fg=MINT_DARK, activebackground="#bdebdc", activeforeground=MINT_DARK).grid(row=4, column=3, padx=8, pady=(2, 4))
 
         settings = GlassCard(self._backdrop, "02  应用与签名")
-        settings.place(relx=0.025, rely=0.465, relwidth=0.365, relheight=0.43)
+        settings.place(relx=0.025, rely=0.50, relwidth=0.365, relheight=0.425)
         form = settings.body
         for row, label, variable in ((0, "应用名", self.app_name_var), (1, "包名", self.application_id_var), (2, "版本", self.version_name_var), (4, "模板", self.template_var)):
             self._glass_form_row(form, row, label, variable)
@@ -103,7 +101,7 @@ class WizardApp:
         form.columnconfigure(1, weight=1)
 
         report_card = GlassCard(self._backdrop, "03  检查报告 / 构建日志")
-        report_card.place(relx=0.41, rely=0.465, relwidth=0.565, relheight=0.43)
+        report_card.place(relx=0.41, rely=0.50, relwidth=0.565, relheight=0.425)
         self.report_text = tk.Text(report_card.body, height=18, wrap="word", state="disabled", bg="#ffffff", fg=INK, relief="flat", highlightthickness=1, highlightbackground="#c9eee2", padx=12, pady=10, font=("Cascadia Mono", 9))
         self.report_text.pack(fill="both", expand=True, padx=10, pady=(2, 10))
 

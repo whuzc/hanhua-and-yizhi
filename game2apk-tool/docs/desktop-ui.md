@@ -3,7 +3,7 @@
 桌面版保留标准 Tk 控件和零额外运行时依赖，但增加了一层独立的视觉原语：
 
 - `LiquidBackdrop` 在背景上以低频坐标动画移动柔和光斑，动画只更新 Canvas 的 transform-like 坐标，不改变布局。
-- `GlassCard` 使用圆角、多层描边和高亮边缘模拟玻璃卡片；Windows 11 上会尽力启用 DWM transient/Mica 背景，旧系统自动回退。
+- `GlassCard` 使用圆角、连续描边和轻微偏移阴影模拟玻璃卡片，避免分段描边造成接缝；Windows 11 上会尽力启用 DWM transient/Mica 背景，旧系统自动回退。
 - `GlassButton` 提供悬停颜色和按压反馈，快速响应且可被中断。
 - 设置 `GAME2APK_REDUCE_MOTION=1` 可关闭背景运动，保留操作反馈。
 

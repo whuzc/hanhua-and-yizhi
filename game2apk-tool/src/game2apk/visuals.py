@@ -48,18 +48,35 @@ def apply_windows_backdrop(window: tk.Misc) -> None:
 
 
 def _round_rect(canvas: tk.Canvas, x1: float, y1: float, x2: float, y2: float, radius: float, **kwargs: object) -> tuple[int, ...]:
-    """Draw a smooth rounded rectangle using Canvas primitives."""
+    """Draw a seam-free rounded rectangle with separate fill and outline layers."""
 
     radius = max(1.0, min(radius, (x2 - x1) / 2, (y2 - y1) / 2))
-    ids = (
-        canvas.create_rectangle(x1 + radius, y1, x2 - radius, y2, **kwargs),
-        canvas.create_rectangle(x1, y1 + radius, x2, y2 - radius, **kwargs),
-        canvas.create_oval(x1, y1, x1 + radius * 2, y1 + radius * 2, **kwargs),
-        canvas.create_oval(x2 - radius * 2, y1, x2, y1 + radius * 2, **kwargs),
-        canvas.create_oval(x1, y2 - radius * 2, x1 + radius * 2, y2, **kwargs),
-        canvas.create_oval(x2 - radius * 2, y2 - radius * 2, x2, y2, **kwargs),
-    )
-    return ids
+    fill = kwargs.pop("fill", "")
+    outline = kwargs.pop("outline", "")
+    width = kwargs.pop("width", 1)
+    tags = kwargs.pop("tags", "")
+    ids: list[int] = [
+        canvas.create_rectangle(x1 + radius, y1, x2 - radius, y2, fill=fill, outline="", tags=tags, **kwargs),
+        canvas.create_rectangle(x1, y1 + radius, x2, y2 - radius, fill=fill, outline="", tags=tags, **kwargs),
+        canvas.create_oval(x1, y1, x1 + radius * 2, y1 + radius * 2, fill=fill, outline="", tags=tags, **kwargs),
+        canvas.create_oval(x2 - radius * 2, y1, x2, y1 + radius * 2, fill=fill, outline="", tags=tags, **kwargs),
+        canvas.create_oval(x1, y2 - radius * 2, x1 + radius * 2, y2, fill=fill, outline="", tags=tags, **kwargs),
+        canvas.create_oval(x2 - radius * 2, y2 - radius * 2, x2, y2, fill=fill, outline="", tags=tags, **kwargs),
+    ]
+    if outline:
+        # A single continuous line/arc layer avoids the six visible seams
+        # produced by giving every fill primitive its own outline.
+        ids.extend([
+            canvas.create_line(x1 + radius, y1, x2 - radius, y1, fill=outline, width=width, tags=tags),
+            canvas.create_line(x1 + radius, y2, x2 - radius, y2, fill=outline, width=width, tags=tags),
+            canvas.create_line(x1, y1 + radius, x1, y2 - radius, fill=outline, width=width, tags=tags),
+            canvas.create_line(x2, y1 + radius, x2, y2 - radius, fill=outline, width=width, tags=tags),
+            canvas.create_arc(x1, y1, x1 + radius * 2, y1 + radius * 2, start=90, extent=90, style="arc", outline=outline, width=width, tags=tags),
+            canvas.create_arc(x2 - radius * 2, y1, x2, y1 + radius * 2, start=0, extent=90, style="arc", outline=outline, width=width, tags=tags),
+            canvas.create_arc(x1, y2 - radius * 2, x1 + radius * 2, y2, start=180, extent=90, style="arc", outline=outline, width=width, tags=tags),
+            canvas.create_arc(x2 - radius * 2, y2 - radius * 2, x2, y2, start=270, extent=90, style="arc", outline=outline, width=width, tags=tags),
+        ])
+    return tuple(ids)
 
 
 class LiquidBackdrop(tk.Canvas):
@@ -155,10 +172,15 @@ class GlassCard(tk.Frame):
 
     def _draw(self, _event: tk.Event[tk.Misc] | None = None) -> None:
         self._surface.delete("card")
+        self._surface.delete("shadow")
         width, height = max(2, self.winfo_width()), max(2, self.winfo_height())
-        _round_rect(self._surface, 2, 2, width - 2, height - 2, 18, fill=GLASS, outline="#c9eee2", width=1, tags="card")
-        _round_rect(self._surface, 4, 4, width - 4, height - 4, 16, fill="", outline="#ffffff", width=1, tags="card")
+        # A single soft offset layer gives the card depth without the
+        # segmented corner strokes that made the previous screenshot look
+        # like square boxes with scratches around them.
+        _round_rect(self._surface, 2, 4, width - 2, height, 18, fill="#d7eee7", outline="", tags="shadow")
+        _round_rect(self._surface, 2, 2, width - 2, height - 2, 18, fill=GLASS, outline="#bfe6da", width=1, tags="card")
         self._surface.tag_lower("card")
+        self._surface.tag_lower("shadow")
 
 
 class GlassButton(tk.Button):
@@ -176,10 +198,16 @@ class GlassButton(tk.Button):
         kwargs.setdefault("padx", 16)
         kwargs.setdefault("pady", 8)
         kwargs.setdefault("font", ("Segoe UI", 10, "bold"))
+        normal_bg = str(kwargs.get("bg", MINT))
+        normal_fg = str(kwargs.get("fg", "#ffffff"))
+        hover_bg = str(kwargs.pop("hover_bg", MINT_DARK if normal_bg == MINT else "#c3ecdf"))
+        hover_fg = str(kwargs.pop("hover_fg", "#ffffff" if normal_bg == MINT else MINT_DARK))
         super().__init__(master, **kwargs)
-        self._normal_bg = str(kwargs.get("bg", MINT))
-        self._hover_bg = MINT_DARK
-        self.bind("<Enter>", lambda _event: self.configure(bg=self._hover_bg), add="+")
-        self.bind("<Leave>", lambda _event: self.configure(bg=self._normal_bg), add="+")
+        self._normal_bg = normal_bg
+        self._normal_fg = normal_fg
+        self._hover_bg = hover_bg
+        self._hover_fg = hover_fg
+        self.bind("<Enter>", lambda _event: self.configure(bg=self._hover_bg, fg=self._hover_fg), add="+")
+        self.bind("<Leave>", lambda _event: self.configure(bg=self._normal_bg, fg=self._normal_fg), add="+")
         self.bind("<ButtonPress-1>", lambda _event: self.configure(relief="sunken", padx=15, pady=9), add="+")
         self.bind("<ButtonRelease-1>", lambda _event: self.configure(relief="flat", padx=16, pady=8), add="+")

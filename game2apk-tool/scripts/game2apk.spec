@@ -26,12 +26,19 @@ for runtime_root in runtime_roots:
         if binary_path.is_file() and not any(Path(source).name.casefold() == binary_name.casefold() for source, _ in tk_binaries):
             tk_binaries.append((str(binary_path), "."))
 
+# The optional browser shell is static HTML/CSS/JS.  It is copied to the
+# release root by build-portable.ps1 as well, so ``--web`` works in both a
+# source checkout and a frozen one-folder release.
+frontend_dir = ROOT / "frontend"
+if frontend_dir.is_dir():
+    tk_datas.append((str(frontend_dir), "frontend"))
+
 a = Analysis(
     [str(ROOT / "src" / "game2apk" / "portable_entry.py")],
     pathex=[str(ROOT / "src")],
     binaries=tk_binaries,
     datas=tk_datas,
-    hiddenimports=["game2apk.gui", "tkinter", "tkinter.ttk", "_tkinter"],
+    hiddenimports=["game2apk.gui", "game2apk.web_frontend", "tkinter", "tkinter.ttk", "_tkinter"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

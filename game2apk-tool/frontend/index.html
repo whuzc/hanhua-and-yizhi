@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#edf7f2" />
+    <title>RPG Maker MV → Android</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-a" aria-hidden="true"></div>
+    <div class="ambient ambient-b" aria-hidden="true"></div>
+    <div class="ambient ambient-c" aria-hidden="true"></div>
+    <main class="shell" data-app="game2apk">
+      <header class="topbar glass-surface">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">MV</div>
+          <div>
+            <p class="eyebrow">GAME2APK TOOL</p>
+            <h1>RPG Maker MV <span>→ Android</span></h1>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <span id="health-pill" class="status-pill status-pending"><i></i>正在检查工具链</span>
+          <button class="icon-button" type="button" title="减少动效" data-action="toggle-motion" aria-label="减少动效">✦</button>
+        </div>
+      </header>
+
+      <section class="hero glass-surface">
+        <div>
+          <p class="eyebrow">安全暂存 · 可选汉化 · 签名构建</p>
+          <h2>把你的 MV 项目带到手机上。</h2>
+          <p class="hero-copy">本地完成检查、暂存、构建和静态验收。原游戏资源、存档、密钥与 APK 永远不会进入这个分享包。</p>
+        </div>
+        <div class="hero-orbit" aria-hidden="true"><span></span><span></span><span></span></div>
+      </section>
+
+      <div class="workspace-grid">
+        <section class="panel glass-surface" data-section="project">
+          <div class="panel-heading"><span class="step-index">01</span><div><h3>项目来源</h3><p>选择已解包的 RPG Maker MV 项目或 www 目录。</p></div></div>
+          <label class="field-label" for="source-path">项目路径</label>
+          <div class="field-row"><input id="source-path" class="text-field" placeholder="例如：D:\\Games\\MyMVGame" autocomplete="off" /><button class="ghost-button" data-action="choose-source" type="button">选择目录</button></div>
+          <button id="inspect-button" class="primary-button" data-action="inspect" type="button"><span>检查项目</span><b>↗</b></button>
+        </section>
+
+        <section class="panel glass-surface" data-section="toolchain">
+          <div class="panel-heading"><span class="step-index">00</span><div><h3>Android 工具链</h3><p>Release 不内置工具；自动发现后再让你确认下载。</p></div></div>
+          <div id="toolchain-state" class="callout pending"><span class="callout-dot"></span><div><strong>正在读取本机配置</strong><small>ANDROID_SDK_ROOT · JAVA_HOME · PATH</small></div></div>
+          <div class="path-stack"><div class="path-item"><span>SDK</span><code id="sdk-path">未发现</code></div><div class="path-item"><span>JDK</span><code id="jdk-path">未发现</code></div><div class="path-item"><span>Gradle</span><code id="gradle-path">用户目录缓存</code></div></div>
+          <div class="button-row"><button class="ghost-button" data-action="configure" type="button">手动配置</button><button class="ghost-button" data-action="download" type="button">下载官方工具</button></div>
+        </section>
+
+        <section class="panel glass-surface" data-section="settings">
+          <div class="panel-heading"><span class="step-index">02</span><div><h3>应用与签名</h3><p>只在构建时使用，密码不会写入日志。</p></div></div>
+          <div class="form-grid"><label>应用名称<input class="text-field" value="RPG Maker MV" /></label><label>Application ID<input class="text-field" value="com.game2apk.app" /></label><label>版本<input class="text-field" value="1.0.0" /></label><label>Version code<input class="text-field" value="1" inputmode="numeric" /></label></div>
+          <label class="check-row"><input type="checkbox" /> <span>使用 DeepSeek 翻译（需要明确确认第三方传输）</span></label>
+        </section>
+
+        <section class="panel report-panel glass-surface" data-section="report">
+          <div class="panel-heading"><span class="step-index">03</span><div><h3>检查报告</h3><p>动态状态会在这里逐步出现。</p></div><span id="report-state" class="mini-state">等待检查</span></div>
+          <div id="report-log" class="report-log"><div class="empty-state"><div class="empty-icon">⌁</div><p>选择项目后点击“检查项目”</p><small>前端壳只通过 localhost 与桌面进程通信</small></div></div>
+          <div class="progress-track"><span id="progress-fill"></span></div>
+          <button class="primary-button build-button" data-action="build" type="button" disabled><span>构建并验收</span><b>→</b></button>
+        </section>
+      </div>
+
+      <footer class="footer"><span>本地优先 · 不上传 APK</span><span>v1.2 desktop shell</span></footer>
+    </main>
+    <script src="./app.js" defer></script>
+  </body>
+</html>

@@ -147,6 +147,8 @@ class SecurityAndInputContractTests(unittest.TestCase):
             self.assertIn(token, visuals)
         self.assertIn("GlassCard", gui)
         self.assertIn("LiquidBackdrop", gui)
+        self.assertIn("hover_fg", visuals)
+        self.assertNotIn('attributes("-alpha", 0.98)', gui)
 
 
 if __name__ == "__main__":
