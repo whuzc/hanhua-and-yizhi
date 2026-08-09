@@ -12,7 +12,7 @@ from .builder import BuildService
 from .config import build_config, default_control_config
 from .errors import BlockedError
 from .inspector import inspect_game
-from .models import BuildConfig, BuildResult, InspectionReport, StageManifest, TranslationReport, VerificationReport
+from .models import BuildConfig, BuildResult, InspectionReport, StageManifest, ToolchainInfo, TranslationReport, VerificationReport
 from .patcher import patch_staged_www
 from .security import atomic_write_json, atomic_write_text, now_utc
 from .signing import SigningService
@@ -74,8 +74,15 @@ class PipelineService:
     def translate(self, stage: StageManifest, **kwargs: Any) -> TranslationReport:
         return TranslationService(self.progress, self.cancel_event).translate(stage.staged_www, memory_path=self.state_root / "translation-memory.json", **kwargs)
 
-    def build(self, template: str | Path, stage: StageManifest, config: BuildConfig, api_key: str | None = None) -> BuildResult:
-        return BuildService(self.progress, self.cancel_event).build(template, stage, config, api_key=api_key)
+    def build(
+        self,
+        template: str | Path,
+        stage: StageManifest,
+        config: BuildConfig,
+        api_key: str | None = None,
+        toolchain: ToolchainInfo | None = None,
+    ) -> BuildResult:
+        return BuildService(self.progress, self.cancel_event).build(template, stage, config, toolchain=toolchain, api_key=api_key)
 
     def sign(self, result: BuildResult, config: BuildConfig, password: str | None = None) -> dict[str, object]:
         if not result.apk_path:

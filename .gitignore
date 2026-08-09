@@ -14,7 +14,11 @@ __pycache__/
 
 # 构建输出产物
 dist/portable/
+dist/*.zip
 dist/*.apk
+**/dist/portable/
+**/dist/*.zip
+**/dist/*.apk
 dist/*.aab
 
 # 密钥与存档

@@ -13,6 +13,7 @@ from .config import build_config, default_control_config
 from .errors import Game2ApkError
 from .models import BuildConfig
 from .pipeline import PipelineService
+from .toolchain import COMPONENTS, download_component, discover_configured, load_config, missing_components, save_config
 
 
 class WizardApp:
@@ -28,6 +29,7 @@ class WizardApp:
         self.build_result = None
         self._build_vars()
         self._build_ui()
+        self._refresh_toolchain()
         self.root.after(100, self._poll)
 
     def _build_vars(self) -> None:
@@ -43,29 +45,74 @@ class WizardApp:
         self.sign_password_var = tk.StringVar()
         self.status_var = tk.StringVar(value="请选择已解包的 RPG Maker MV 游戏目录")
         self.progress_var = tk.DoubleVar(value=0)
+        self.toolchain_status_var = tk.StringVar(value="正在检查 Android 构建工具链…")
+        self.sdk_dir_var = tk.StringVar()
+        self.jdk_dir_var = tk.StringVar()
+        self.gradle_home_var = tk.StringVar()
 
     def _build_ui(self) -> None:
         self.root.title("RPG Maker MV → Android APK")
-        self.root.geometry("820x620")
-        self.root.minsize(720, 520)
-        outer = ttk.Frame(self.root, padding=12)
+        self.root.geometry("1040x760")
+        self.root.minsize(860, 640)
+        self.root.configure(bg="#edf7f2")
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure("TFrame", background="#edf7f2")
+        style.configure("Card.TLabelframe", background="#ffffff", bordercolor="#c3ecdf", relief="solid")
+        style.configure("Card.TLabelframe.Label", background="#ffffff", foreground="#1d7463", font=("Segoe UI", 10, "bold"))
+        style.configure("TLabel", background="#edf7f2", foreground="#263e3a")
+        style.configure("Title.TLabel", background="#edf7f2", foreground="#1b5d51", font=("Segoe UI", 20, "bold"))
+        style.configure("Subtitle.TLabel", background="#edf7f2", foreground="#728b85")
+        style.configure("Accent.TButton", background="#2eb595", foreground="#ffffff", padding=(14, 8), font=("Segoe UI", 10, "bold"))
+        style.map("Accent.TButton", background=[("active", "#209278"), ("disabled", "#a9cfc2")])
+        style.configure("TButton", padding=(10, 6))
+        style.configure("TEntry", fieldbackground="#ffffff")
+        style.configure("Horizontal.TProgressbar", troughcolor="#dff6ed", background="#2eb595", bordercolor="#dff6ed", lightcolor="#58c9ad", darkcolor="#209278")
+        outer = ttk.Frame(self.root, padding=18)
         outer.pack(fill="both", expand=True)
-        title = ttk.Label(outer, text="RPG Maker MV Android 工具", font=("Segoe UI", 16, "bold"))
+        title = ttk.Label(outer, text="RPG Maker MV → Android", style="Title.TLabel")
         title.pack(anchor="w")
-        ttk.Label(outer, text="选择游戏 → 检查 → 可选翻译 → 应用/控件/签名设置 → 构建 → 验证").pack(anchor="w", pady=(2, 10))
+        ttk.Label(outer, text="安全暂存 · 可选汉化 · 签名构建 · 静态验收", style="Subtitle.TLabel").pack(anchor="w", pady=(3, 14))
 
-        source_frame = ttk.LabelFrame(outer, text="1. 选择游戏")
+        source_frame = ttk.LabelFrame(outer, text="01  项目来源", style="Card.TLabelframe")
         source_frame.pack(fill="x", pady=4)
+
+        toolchain = ttk.LabelFrame(outer, text="00  Android build toolchain (not bundled in Release)", style="Card.TLabelframe")
+        toolchain.pack(fill="x", pady=4)
+        ttk.Label(toolchain, textvariable=self.toolchain_status_var).grid(row=0, column=0, columnspan=4, sticky="w", padx=8, pady=(6, 3))
+        ttk.Label(toolchain, text="SDK").grid(row=1, column=0, sticky="w", padx=8, pady=2)
+        ttk.Entry(toolchain, textvariable=self.sdk_dir_var).grid(row=1, column=1, sticky="ew", padx=4, pady=2)
+        ttk.Button(toolchain, text="Choose", command=lambda: self._choose_tool_path(self.sdk_dir_var, "Choose Android SDK directory")).grid(row=1, column=2, padx=4, pady=2)
+        ttk.Label(toolchain, text="JDK").grid(row=2, column=0, sticky="w", padx=8, pady=2)
+        ttk.Entry(toolchain, textvariable=self.jdk_dir_var).grid(row=2, column=1, sticky="ew", padx=4, pady=2)
+        ttk.Button(toolchain, text="Choose", command=lambda: self._choose_tool_path(self.jdk_dir_var, "Choose JDK directory")).grid(row=2, column=2, padx=4, pady=2)
+        ttk.Label(toolchain, text="Gradle cache").grid(row=3, column=0, sticky="w", padx=8, pady=2)
+        ttk.Entry(toolchain, textvariable=self.gradle_home_var).grid(row=3, column=1, sticky="ew", padx=4, pady=2)
+        ttk.Button(toolchain, text="Choose", command=lambda: self._choose_tool_path(self.gradle_home_var, "Choose Gradle user directory")).grid(row=3, column=2, padx=4, pady=2)
+        ttk.Button(toolchain, text="Save and recheck", command=self._save_toolchain).grid(row=1, column=3, rowspan=2, padx=8, pady=2)
+        ttk.Button(toolchain, text="Download Android tools", command=lambda: self._download_tool("android_cmdline_tools")).grid(row=3, column=3, padx=8, pady=2)
+        ttk.Button(toolchain, text="Download JDK 17", command=lambda: self._download_tool("temurin_jdk17")).grid(row=4, column=3, padx=8, pady=(2, 6))
+        toolchain.columnconfigure(1, weight=1)
         ttk.Entry(source_frame, textvariable=self.source_var).pack(side="left", fill="x", expand=True, padx=6, pady=6)
         ttk.Button(source_frame, text="浏览…", command=self._browse_source).pack(side="left", padx=6)
         self.inspect_button = ttk.Button(source_frame, text="检查", command=self._inspect)
         self.inspect_button.pack(side="left", padx=(0, 6))
 
-        self.report_text = tk.Text(outer, height=11, wrap="word", state="disabled")
-        self.report_text.pack(fill="both", expand=True, pady=4)
+        content = ttk.Frame(outer)
+        content.pack(fill="both", expand=True, pady=8)
+        content.columnconfigure(0, weight=2)
+        content.columnconfigure(1, weight=3)
+        content.rowconfigure(0, weight=1)
+        report_card = ttk.LabelFrame(content, text="检查报告 / 构建日志", style="Card.TLabelframe")
+        report_card.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        self.report_text = tk.Text(report_card, height=16, wrap="word", state="disabled", bg="#ffffff", fg="#263e3a", relief="flat", padx=10, pady=8, font=("Consolas", 10))
+        self.report_text.pack(fill="both", expand=True, padx=6, pady=6)
 
-        settings = ttk.LabelFrame(outer, text="2. 应用 / 控件 / 签名设置")
-        settings.pack(fill="x", pady=4)
+        settings = ttk.LabelFrame(content, text="02  应用与签名", style="Card.TLabelframe")
+        settings.grid(row=0, column=0, sticky="new")
         self._row(settings, 0, "应用名", self.app_name_var)
         self._row(settings, 1, "包名", self.application_id_var)
         self._row(settings, 2, "版本", self.version_name_var)
@@ -82,7 +129,7 @@ class WizardApp:
 
         controls = ttk.Frame(outer)
         controls.pack(fill="x", pady=(6, 0))
-        self.build_button = ttk.Button(controls, text="构建并验证", command=self._run_pipeline, state="disabled")
+        self.build_button = ttk.Button(controls, text="构建并验证", style="Accent.TButton", command=self._run_pipeline, state="disabled")
         self.build_button.pack(side="left")
         self.cancel_button = ttk.Button(controls, text="取消", command=self._cancel, state="disabled")
         self.cancel_button.pack(side="left", padx=8)
@@ -99,6 +146,56 @@ class WizardApp:
         value = filedialog.askdirectory(title="选择游戏根目录或 www 目录")
         if value:
             self.source_var.set(value)
+
+    def _choose_tool_path(self, variable: tk.StringVar, title: str) -> None:
+        value = filedialog.askdirectory(title=title)
+        if value:
+            variable.set(value)
+
+    def _refresh_toolchain(self) -> None:
+        saved = load_config()
+        self.sdk_dir_var.set(saved.get("sdk_dir", ""))
+        self.jdk_dir_var.set(saved.get("jdk_dir", ""))
+        self.gradle_home_var.set(saved.get("gradle_user_home", ""))
+        try:
+            info = discover_configured(self.template_var.get())
+            if not self.sdk_dir_var.get() and info.sdk_dir:
+                self.sdk_dir_var.set(info.sdk_dir)
+            if not self.jdk_dir_var.get() and info.jdk_dir:
+                self.jdk_dir_var.set(info.jdk_dir)
+            if not self.gradle_home_var.get() and info.gradle_user_home:
+                self.gradle_home_var.set(info.gradle_user_home)
+            missing = missing_components(info)
+            if missing:
+                self.toolchain_status_var.set("Missing: " + ", ".join(missing) + ". Choose folders or explicitly download.")
+            else:
+                self.toolchain_status_var.set("Toolchain ready: SDK, JDK, aapt2, zipalign, apksigner and Gradle wrapper (adb optional)")
+        except Exception as exc:
+            self.toolchain_status_var.set(f"Toolchain check failed: {exc}")
+
+    def _save_toolchain(self) -> None:
+        save_config({"sdk_dir": self.sdk_dir_var.get(), "jdk_dir": self.jdk_dir_var.get(), "gradle_user_home": self.gradle_home_var.get()})
+        self._refresh_toolchain()
+
+    def _download_tool(self, component_name: str) -> None:
+        component = COMPONENTS[component_name]
+        target = filedialog.askdirectory(title=f"Choose install directory for {component['label']}")
+        if not target:
+            return
+        if not messagebox.askyesno("Confirm download", f"Download {component['label']} from official host {component['host']}?\nNo API keys or credentials are sent."):
+            return
+        self.status_var.set(f"Downloading {component['label']}…")
+        self.cancel_button.configure(state="normal")
+        self.cancel_event.clear()
+
+        def worker() -> None:
+            try:
+                result = download_component(component_name, target, confirm=lambda _message: True, progress=lambda done, total: self.queue.put(("download", (done, total))))
+                self.queue.put(("download_complete", (component_name, result)))
+            except Exception as exc:
+                self.queue.put(("error", exc))
+
+        self.executor.submit(worker)
 
     def _show_report(self, text: str) -> None:
         self.report_text.configure(state="normal")
@@ -159,7 +256,13 @@ class WizardApp:
                 if not bool(settings["confirm"]):
                     raise Game2ApkError("翻译前必须勾选第三方 DeepSeek 发送确认")
                 self.service.translate(stage, api_key=settings["api_key"], confirmed_third_party=True, force=True)
-            result = self.service.build(str(settings["template"]), stage, config, api_key=settings["api_key"])
+            configured_tools = discover_configured(str(settings["template"]))
+            # adb is useful for optional device install/diagnostics but is not
+            # required to assemble or sign a release APK.
+            missing = [item for item in missing_components(configured_tools) if item != "adb"]
+            if missing:
+                raise Game2ApkError("Android 构建工具链未就绪：" + ", ".join(missing) + "。请先在顶部选择/安装并保存路径。")
+            result = self.service.build(str(settings["template"]), stage, config, toolchain=configured_tools, api_key=settings["api_key"])
             if result.return_code != 0 or not result.apk_path:
                 raise Game2ApkError(f"Gradle 构建失败，退出码 {result.return_code}；日志：{result.log_path}")
             self.service.sign(result, config, password=settings["sign_password"])
@@ -181,6 +284,22 @@ class WizardApp:
                     stage, fraction, message = value
                     self.progress_var.set(float(fraction) * 100)
                     self.status_var.set(f"{stage}: {message}")
+                elif event == "download":
+                    done, total = value
+                    self.progress_var.set((float(done) / float(total) * 100) if total else 0)
+                    self.status_var.set(f"Downloading toolchain: {done // (1024 * 1024)} MiB")
+                elif event == "download_complete":
+                    component_name, result = value
+                    self.cancel_button.configure(state="disabled")
+                    if component_name == "android_cmdline_tools":
+                        self.sdk_dir_var.set(str(result.extracted_to))
+                        self._save_toolchain()
+                    elif component_name == "temurin_jdk17":
+                        self.jdk_dir_var.set(str(result.extracted_to))
+                        self._save_toolchain()
+                    self.status_var.set(f"Downloaded {COMPONENTS[component_name]['label']} to {result.extracted_to}")
+                    messagebox.showinfo("Toolchain download", "Download and extraction complete. Android command-line tools only provide sdkmanager; install an Android platform and build-tools package with sdkmanager before building. The app does not silently install packages.")
+                    self._refresh_toolchain()
                 elif event == "inspection":
                     self.inspection = value
                     keys = ", ".join(f"{item.get('key')}→公共事件 {item.get('common_event_id')}" for item in value.custom_keys)
