@@ -4,6 +4,8 @@
 
 Windows 本地工具：检查 RPG Maker MV、在受标记的 `.work` 副本中暂存和补丁、可选离线翻译、Gradle 构建、稳定签名并做 APK 静态验收。原游戏目录只读；本项目不生成 AAB。
 
+Windows portable 版的桌面 UI 使用独立的玻璃/液态视觉层：动态光斑、圆角卡片、DWM 背景和按压反馈见 `docs/desktop-ui.md`。动画可用 `GAME2APK_REDUCE_MOTION=1` 关闭。
+
 ## 快速开始
 
 ```powershell

@@ -14,6 +14,7 @@ from .errors import Game2ApkError
 from .models import BuildConfig
 from .pipeline import PipelineService
 from .toolchain import COMPONENTS, download_component, discover_configured, load_config, missing_components, save_config
+from .visuals import BACKGROUND, GLASS, INK, MINT, MINT_DARK, MUTED, GlassButton, GlassCard, LiquidBackdrop, apply_windows_backdrop
 
 
 class WizardApp:
@@ -51,6 +52,84 @@ class WizardApp:
         self.gradle_home_var = tk.StringVar()
 
     def _build_ui(self) -> None:
+        """Build the glass/liquid desktop surface while keeping widget handles stable."""
+        self.root.title("RPG Maker MV → Android APK")
+        self.root.geometry("1120x820")
+        self.root.minsize(920, 680)
+        self.root.configure(bg=BACKGROUND)
+        try:
+            self.root.attributes("-alpha", 0.98)
+        except tk.TclError:
+            pass
+        apply_windows_backdrop(self.root)
+
+        self._backdrop = LiquidBackdrop(self.root)
+        self._backdrop.pack(fill="both", expand=True)
+
+        tk.Label(self._backdrop, text="RPG Maker MV  →  Android", bg=BACKGROUND, fg=MINT_DARK, font=("Segoe UI", 23, "bold"), anchor="w").place(relx=0.035, rely=0.025, relwidth=0.7, relheight=0.05)
+        tk.Label(self._backdrop, text="安全暂存 · 可选汉化 · 签名构建 · 静态验收", bg=BACKGROUND, fg=MUTED, font=("Segoe UI", 10), anchor="w").place(relx=0.037, rely=0.078, relwidth=0.65, relheight=0.035)
+        tk.Label(self._backdrop, text="●  LOCAL · 未联网", bg=BACKGROUND, fg=MINT_DARK, font=("Segoe UI", 9, "bold"), anchor="e").place(relx=0.75, rely=0.04, relwidth=0.21, relheight=0.04)
+
+        source = GlassCard(self._backdrop, "01  项目来源")
+        source.place(relx=0.025, rely=0.125, relwidth=0.95, relheight=0.095)
+        self.source_var_entry = tk.Entry(source.body, textvariable=self.source_var, bg="#ffffff", fg=INK, relief="flat", highlightthickness=1, highlightbackground="#c9eee2", highlightcolor=MINT, font=("Segoe UI", 10))
+        self.source_var_entry.pack(side="left", fill="x", expand=True, padx=(12, 6), pady=8, ipady=6)
+        self.inspect_button = GlassButton(source.body, text="检查项目", command=self._inspect)
+        self.inspect_button.pack(side="left", padx=(0, 12), pady=8)
+        GlassButton(source.body, text="浏览…", command=self._browse_source, bg="#dff6ed", fg=MINT_DARK, activebackground="#bdebdc", activeforeground=MINT_DARK).pack(side="left", padx=(0, 8), pady=8)
+
+        toolchain = GlassCard(self._backdrop, "00  Android 工具链  ·  Release 不内置")
+        toolchain.place(relx=0.025, rely=0.235, relwidth=0.95, relheight=0.205)
+        tk.Label(toolchain.body, textvariable=self.toolchain_status_var, bg=GLASS, fg=INK, font=("Segoe UI", 9), anchor="w").grid(row=0, column=0, columnspan=4, sticky="ew", padx=12, pady=(2, 5))
+        self._glass_path_row(toolchain.body, 1, "SDK", self.sdk_dir_var, "选择 SDK", "Choose Android SDK directory")
+        self._glass_path_row(toolchain.body, 2, "JDK", self.jdk_dir_var, "选择 JDK", "Choose JDK directory")
+        self._glass_path_row(toolchain.body, 3, "Gradle 缓存", self.gradle_home_var, "选择缓存", "Choose Gradle user directory")
+        toolchain.body.columnconfigure(1, weight=1)
+        GlassButton(toolchain.body, text="保存并重检", command=self._save_toolchain, bg="#dff6ed", fg=MINT_DARK, activebackground="#bdebdc", activeforeground=MINT_DARK).grid(row=1, column=3, rowspan=2, padx=8, pady=2)
+        GlassButton(toolchain.body, text="下载 Android 工具", command=lambda: self._download_tool("android_cmdline_tools"), bg="#dff6ed", fg=MINT_DARK, activebackground="#bdebdc", activeforeground=MINT_DARK).grid(row=3, column=3, padx=8, pady=2)
+        GlassButton(toolchain.body, text="下载 JDK 17", command=lambda: self._download_tool("temurin_jdk17"), bg="#dff6ed", fg=MINT_DARK, activebackground="#bdebdc", activeforeground=MINT_DARK).grid(row=4, column=3, padx=8, pady=(2, 4))
+
+        settings = GlassCard(self._backdrop, "02  应用与签名")
+        settings.place(relx=0.025, rely=0.465, relwidth=0.365, relheight=0.43)
+        form = settings.body
+        for row, label, variable in ((0, "应用名", self.app_name_var), (1, "包名", self.application_id_var), (2, "版本", self.version_name_var), (4, "模板", self.template_var)):
+            self._glass_form_row(form, row, label, variable)
+        tk.Label(form, text="版本号 versionCode", bg=GLASS, fg=INK, anchor="w", font=("Segoe UI", 9)).grid(row=3, column=0, sticky="w", padx=12, pady=3)
+        tk.Spinbox(form, from_=1, to=2_147_483_647, textvariable=self.version_code_var, bg="#ffffff", fg=INK, relief="flat", highlightthickness=1, highlightbackground="#c9eee2", highlightcolor=MINT).grid(row=3, column=1, sticky="ew", padx=(4, 12), pady=3, ipady=3)
+        tk.Checkbutton(form, text="强制翻译未汉化文本", variable=self.translate_var, bg=GLASS, activebackground=GLASS, fg=INK, selectcolor="#dff6ed", anchor="w", font=("Segoe UI", 9)).grid(row=5, column=0, columnspan=2, sticky="ew", padx=12, pady=3)
+        tk.Checkbutton(form, text="确认发送文本给 DeepSeek", variable=self.confirm_var, bg=GLASS, activebackground=GLASS, fg=INK, selectcolor="#dff6ed", anchor="w", font=("Segoe UI", 9)).grid(row=6, column=0, columnspan=2, sticky="ew", padx=12, pady=3)
+        self._glass_form_row(form, 7, "DeepSeek Key", self.api_key_var, secret=True)
+        self._glass_form_row(form, 8, "签名密码", self.sign_password_var, secret=True)
+        form.columnconfigure(1, weight=1)
+
+        report_card = GlassCard(self._backdrop, "03  检查报告 / 构建日志")
+        report_card.place(relx=0.41, rely=0.465, relwidth=0.565, relheight=0.43)
+        self.report_text = tk.Text(report_card.body, height=18, wrap="word", state="disabled", bg="#ffffff", fg=INK, relief="flat", highlightthickness=1, highlightbackground="#c9eee2", padx=12, pady=10, font=("Cascadia Mono", 9))
+        self.report_text.pack(fill="both", expand=True, padx=10, pady=(2, 10))
+
+        controls = tk.Frame(self._backdrop, bg=BACKGROUND)
+        controls.place(relx=0.025, rely=0.925, relwidth=0.95, relheight=0.055)
+        self.build_button = GlassButton(controls, text="构建并验证", command=self._run_pipeline, state="disabled")
+        self.build_button.pack(side="left")
+        self.cancel_button = GlassButton(controls, text="取消", command=self._cancel, state="disabled", bg="#dff6ed", fg=MINT_DARK, activebackground="#bdebdc", activeforeground=MINT_DARK)
+        self.cancel_button.pack(side="left", padx=8)
+        tk.Label(controls, textvariable=self.status_var, bg=BACKGROUND, fg=MUTED, font=("Segoe UI", 9), anchor="w").pack(side="left", fill="x", expand=True, padx=12)
+        self.progress_bar = ttk.Progressbar(controls, variable=self.progress_var, maximum=100, length=220, mode="determinate")
+        self.progress_bar.pack(side="right", padx=4)
+        self.root.protocol("WM_DELETE_WINDOW", self._close)
+
+    @staticmethod
+    def _glass_form_row(parent: tk.Misc, row: int, label: str, variable: tk.Variable, secret: bool = False) -> None:
+        tk.Label(parent, text=label, bg=GLASS, fg=INK, anchor="w", font=("Segoe UI", 9)).grid(row=row, column=0, sticky="w", padx=12, pady=3)
+        entry = tk.Entry(parent, textvariable=variable, show="*" if secret else "", bg="#ffffff", fg=INK, relief="flat", highlightthickness=1, highlightbackground="#c9eee2", highlightcolor=MINT, font=("Segoe UI", 9))
+        entry.grid(row=row, column=1, sticky="ew", padx=(4, 12), pady=3, ipady=3)
+
+    def _glass_path_row(self, parent: tk.Misc, row: int, label: str, variable: tk.StringVar, button: str, dialog_title: str) -> None:
+        tk.Label(parent, text=label, bg=GLASS, fg=INK, anchor="w", font=("Segoe UI", 9)).grid(row=row, column=0, sticky="w", padx=12, pady=2)
+        tk.Entry(parent, textvariable=variable, bg="#ffffff", fg=INK, relief="flat", highlightthickness=1, highlightbackground="#c9eee2", highlightcolor=MINT, font=("Segoe UI", 9)).grid(row=row, column=1, sticky="ew", padx=4, pady=2, ipady=3)
+        GlassButton(parent, text=button, command=lambda: self._choose_tool_path(variable, dialog_title), bg="#dff6ed", fg=MINT_DARK, activebackground="#bdebdc", activeforeground=MINT_DARK, padx=9, pady=4, font=("Segoe UI", 9)).grid(row=row, column=2, padx=4, pady=2)
+
+    def _build_ui_legacy(self) -> None:
         self.root.title("RPG Maker MV → Android APK")
         self.root.geometry("1040x760")
         self.root.minsize(860, 640)

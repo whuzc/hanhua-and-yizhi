@@ -19,6 +19,10 @@ dist/*.apk
 **/dist/portable/
 **/dist/*.zip
 **/dist/*.apk
+
+# Optional local share bundle generated outside the source tree
+/game2apk-tool-windows-portable/
+/game2apk-tool-windows-portable.zip
 dist/*.aab
 
 # 密钥与存档

@@ -139,6 +139,15 @@ class SecurityAndInputContractTests(unittest.TestCase):
         self.assertIn('"--cli"', entry)
         self.assertIn("console=False", spec)
 
+    def test_desktop_ui_has_glass_liquid_motion_and_reduced_motion_switch(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        visuals = (root / "src" / "game2apk" / "visuals.py").read_text(encoding="utf-8")
+        gui = (root / "src" / "game2apk" / "gui.py").read_text(encoding="utf-8")
+        for token in ("LiquidBackdrop", "GlassCard", "GlassButton", "apply_windows_backdrop", "GAME2APK_REDUCE_MOTION"):
+            self.assertIn(token, visuals)
+        self.assertIn("GlassCard", gui)
+        self.assertIn("LiquidBackdrop", gui)
+
 
 if __name__ == "__main__":
     unittest.main()
