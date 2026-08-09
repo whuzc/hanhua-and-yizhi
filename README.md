@@ -2,8 +2,8 @@
 
 RPG Maker MV 项目迁移到 Android 的 Windows 本地工具。它把**用户自己拥有或获得授权的 MV 项目**暂存到干净模板中，生成可侧载安装的签名 APK，并输出可追溯的静态验收报告。
 
-> 当前工具版本：`v1.3.9`（作弊标签改用文本文档批量翻译，支持助词例外、集中修复与 2% 失败容忍）
-> [下载 Windows portable v1.3.9](https://github.com/whuzc/hanhua-and-yizhi/releases/tag/v1.3.9)
+> 当前工具版本：`v1.3.10`（正文截断自动降思考并二分恢复；翻译失败保留原文但不阻断构建）
+> [下载 Windows portable v1.3.10](https://github.com/whuzc/hanhua-and-yizhi/releases/tag/v1.3.10)
 
 ## 这是什么
 
@@ -92,7 +92,7 @@ $env:GAME2APK_TRANSLATION_BATCH_SIZE = "20" # 1–100
 
 机器翻译仍可能有专有名词或语气问题。建议先备份项目并逐段审阅结果。完整策略见 [docs/translation-performance.md](game2apk-tool/docs/translation-performance.md)。
 
-正文和作弊标签分别统计翻译失败率：失败块占本组不超过 2%（含 2%）时继续生成产物，失败块保留原文并在报告中列出；超过 2% 才停止任务。这样少量模型偶发失败不会让用户完全看不到已完成的翻译效果。
+正文和作弊标签的失败块都会保留原文并继续生成产物，不再按失败比例阻断构建。报告会列出失败数量、比例和原因，方便直接在生成后的 APK 中审阅实际效果；配置、授权、取消和构建/签名错误仍会正常中止任务。
 
 ## Android 运行时功能
 

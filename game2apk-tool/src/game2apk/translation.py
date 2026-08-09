@@ -52,11 +52,6 @@ CHEAT_LABEL_MAX_CONCURRENCY = 2
 # small synthetic/repair batches keep the existing JSON path.
 CHEAT_LABEL_DOCUMENT_MIN_ENTRIES = 96
 CHEAT_LABEL_DOCUMENT_PROMPT_VERSION = "mv-safe-v4-cheat-label-document-preserve-latin"
-# Translation is allowed to finish with a small number of failed blocks.  The
-# pipeline evaluates this independently for the body-text group and the
-# dynamic cheat-label group; a ratio strictly greater than this value blocks
-# artifact generation.  Exactly 2% is intentionally tolerated.
-TRANSLATION_FAILURE_THRESHOLD = 0.02
 _TRANSIENT_HTTP_STATUSES = {408, 425, 429, 500, 502, 503, 504}
 
 
@@ -1310,11 +1305,12 @@ def _request_batch_with_recovery(
             strict_simplified_chinese,
         )
     except (DeepSeekHTTPError, TranslationError) as exc:
-        if strict_simplified_chinese and thinking_enabled and _is_length_response_error(exc):
+        if thinking_enabled and _is_length_response_error(exc):
             # A thinking completion can spend the whole low/high budget on
-            # reasoning even for one sensitive label. Retry once without
+            # reasoning even for a normal dialogue batch. Retry once without
             # thinking before recursively splitting; the user's preference is
-            # still used for all normal successful requests.
+            # still used for all normal successful requests. This recovery is
+            # deliberately shared by body text and cheat labels.
             try:
                 return _request_batch(
                     transport,
@@ -1329,7 +1325,7 @@ def _request_batch_with_recovery(
                 )
             except (DeepSeekHTTPError, TranslationError) as fallback_error:
                 exc = fallback_error
-        if not strict_simplified_chinese or len(entries) <= 1 or not _is_batch_shape_error(exc):
+        if len(entries) <= 1 or not _is_batch_shape_error(exc):
             raise
         midpoint = max(1, len(entries) // 2)
         first = _request_batch_with_recovery(

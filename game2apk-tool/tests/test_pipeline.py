@@ -422,7 +422,7 @@ class PipelineTests(unittest.TestCase):
         manifest = json.loads(Path(stage.manifest_path).read_text(encoding="utf-8"))
         self.assertIn("data/Map001.json", manifest["allowedModifiedFiles"])
 
-    def test_body_translation_at_or_below_two_percent_continues_with_warning(self) -> None:
+    def test_body_translation_failures_continue_with_warning(self) -> None:
         from types import SimpleNamespace
 
         report = TranslationReport(
@@ -453,7 +453,7 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(persisted["continuedWithFailures"])
         self.assertEqual(persisted["failureCount"], 1)
 
-    def test_body_translation_over_two_percent_stops_before_build(self) -> None:
+    def test_body_translation_many_failures_do_not_block_artifact(self) -> None:
         from types import SimpleNamespace
 
         report = TranslationReport(
@@ -462,26 +462,29 @@ class PipelineTests(unittest.TestCase):
             target_language="zh-CN",
             model="deepseek-v4-flash",
             entries_total=50,
-            entries_applied=48,
+            entries_applied=0,
             entries_cached=0,
             failures=[
-                TranslationFailure("body-48", "first synthetic failure", "原文1"),
-                TranslationFailure("body-49", "second synthetic failure", "原文2"),
+                TranslationFailure(f"body-{index}", "synthetic provider truncation", "原文")
+                for index in range(50)
             ],
-            report_path=str(self.root / "body-report-blocked.json"),
+            report_path=str(self.root / "body-report-many-failures.json"),
         )
+        progress: list[tuple[str, float, str]] = []
+        progress_sink = lambda stage_name, fraction, message: progress.append((stage_name, fraction, message))
         with mock.patch("game2apk.pipeline.TranslationService") as service_cls:
             service_cls.return_value.translate.return_value = report
-            with self.assertRaises(BlockedError) as raised:
-                PipelineService(self.root).translate(
-                    SimpleNamespace(staged_www=str(self.www), manifest_path=None),
-                    api_key="not-a-real-key",
-                )
-        self.assertIn("正文", str(raised.exception))
-        self.assertIn("exceeding the 2% threshold", str(raised.exception))
-        self.assertAlmostEqual(report.failure_ratio, 0.04)
+            result = PipelineService(self.root, progress=progress_sink).translate(
+                SimpleNamespace(staged_www=str(self.www), manifest_path=None),
+                api_key="not-a-real-key",
+            )
+        self.assertIs(result, report)
+        self.assertTrue(report.continued_with_failures)
+        self.assertEqual(report.failure_count, 50)
+        self.assertAlmostEqual(report.failure_ratio, 1.0)
+        self.assertTrue(any("正文" in message and "继续构建" in message for _stage, _fraction, message in progress))
 
-    def test_cheat_label_group_uses_the_same_independent_two_percent_policy(self) -> None:
+    def test_cheat_label_failures_do_not_block_artifact(self) -> None:
         from types import SimpleNamespace
 
         report = TranslationReport(
@@ -490,9 +493,12 @@ class PipelineTests(unittest.TestCase):
             target_language="zh-CN",
             model="deepseek-v4-flash",
             entries_total=50,
-            entries_applied=49,
+            entries_applied=0,
             entries_cached=0,
-            failures=[TranslationFailure("label-49", "synthetic label failure", "ラベル")],
+            failures=[
+                TranslationFailure(f"label-{index}", "synthetic label failure", "ラベル")
+                for index in range(50)
+            ],
             report_path=str(self.root / "label-report.json"),
         )
         progress: list[tuple[str, float, str]] = []
@@ -505,6 +511,7 @@ class PipelineTests(unittest.TestCase):
             )
         self.assertIs(result, report)
         self.assertTrue(report.continued_with_failures)
+        self.assertAlmostEqual(report.failure_ratio, 1.0)
         self.assertTrue(any("作弊标签" in message and "保留原文" in message for _stage, _fraction, message in progress))
 
     def test_bad_translation_is_not_applied(self) -> None:

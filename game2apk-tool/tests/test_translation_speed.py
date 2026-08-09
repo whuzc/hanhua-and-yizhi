@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from game2apk.errors import BlockedError, CancelledError, TranslationError
+from game2apk.errors import CancelledError, TranslationError
 from game2apk.models import TranslationEntry
 from game2apk.translation import (
     CHEAT_VISIBLE_SWITCH_LIMIT,
@@ -126,6 +126,36 @@ class _SizeLimitedStrictTransport(_StrictChineseLabelTransport):
         if len(items) > self.limit:
             raise TranslationError("DeepSeek response was not complete: length")
         return super().chat(payload, api_key)
+
+
+class _SizeLimitedBodyTransport(_ParallelTransport):
+    """Simulate a body-text provider that truncates large JSON batches."""
+
+    def __init__(self, limit: int = 4) -> None:
+        super().__init__()
+        self.limit = limit
+        self.max_items = 0
+
+    def chat(self, payload: dict, api_key: str) -> dict:
+        prompt = payload["messages"][-1]["content"]
+        items = json.loads(prompt.split("INPUT=", 1)[1])
+        with self.lock:
+            self.calls.append(payload)
+            self.max_items = max(self.max_items, len(items))
+        if len(items) > self.limit:
+            raise TranslationError("DeepSeek response was not complete: length")
+        translated = [
+            {"id": item["id"], "segments": [f"{segment} [zh]" for segment in item["segments"]]}
+            for item in items
+        ]
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"content": json.dumps({"translations": translated}, ensure_ascii=False)},
+                }
+            ]
+        }
 
 
 class _RepairOnRetryTransport:
@@ -253,6 +283,42 @@ class TranslationSpeedTests(unittest.TestCase):
             for payload in transport.calls:
                 self.assertEqual(payload["thinking"], {"type": "disabled"})
                 self.assertNotIn("reasoning_effort", payload)
+
+    def test_body_batches_recover_from_length_by_retrying_and_splitting(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            www = root / "www"
+            (www / "data").mkdir(parents=True)
+            commands = []
+            for index in range(20):
+                commands.extend(
+                    [
+                        {"code": 101, "parameters": ["", 0, 0, 2]},
+                        {"code": 401, "parameters": [f"Body text {index}"]},
+                    ]
+                )
+            (www / "data" / "Map001.json").write_text(
+                json.dumps({"events": [None, {"pages": [{"list": commands}]}]}),
+                encoding="utf-8",
+            )
+            transport = _SizeLimitedBodyTransport(limit=4)
+            report = TranslationService().translate(
+                www,
+                api_key="not-a-real-key",
+                transport=transport,
+                memory_path=root / "memory.json",
+                confirmed_third_party=True,
+                force=True,
+                batch_size=20,
+                max_concurrency=1,
+                thinking_enabled=True,
+            )
+            self.assertEqual(report.entries_total, 20)
+            self.assertEqual(report.entries_applied, 20)
+            self.assertFalse(report.failures)
+            self.assertGreater(transport.max_items, 4)
+            self.assertTrue(any(payload["thinking"] == {"type": "disabled"} for payload in transport.calls))
+            self.assertGreater(len(transport.calls), 1)
 
     def test_cheat_label_scope_translates_system_labels_without_dialogue(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -419,7 +485,7 @@ class TranslationSpeedTests(unittest.TestCase):
             for payload in transport.calls[1:]:
                 self.assertEqual(payload["thinking"], {"type": "disabled"})
 
-    def test_pipeline_reports_first_cheat_label_failure_reason_without_key(self) -> None:
+    def test_pipeline_keeps_cheat_label_failure_reason_without_key_and_continues(self) -> None:
         from types import SimpleNamespace
         from game2apk.pipeline import PipelineService
 
@@ -438,17 +504,22 @@ class TranslationSpeedTests(unittest.TestCase):
                 def chat(self, _payload: dict, api_key: str) -> dict:
                     raise RuntimeError(f"synthetic provider failure for {api_key}")
 
-            with self.assertRaises(BlockedError) as raised:
-                PipelineService(root).translate_cheat_labels(
-                    SimpleNamespace(staged_www=str(www), manifest_path=None),
-                    api_key="secret-token",
-                    transport=AlwaysFailTransport(),
-                    confirmed_third_party=True,
-                )
-            message = str(raised.exception)
-            self.assertIn("first failure", message)
-            self.assertIn("synthetic provider failure", message)
-            self.assertNotIn("secret-token", message)
+            progress: list[tuple[str, float, str]] = []
+            report = PipelineService(
+                root,
+                progress=lambda stage_name, fraction, message: progress.append((stage_name, fraction, message)),
+            ).translate_cheat_labels(
+                SimpleNamespace(staged_www=str(www), manifest_path=None),
+                api_key="secret-token",
+                transport=AlwaysFailTransport(),
+                confirmed_third_party=True,
+            )
+            self.assertTrue(report.failures)
+            self.assertTrue(report.continued_with_failures)
+            serialized = json.dumps(report.to_dict(), ensure_ascii=False)
+            self.assertIn("synthetic provider failure", serialized)
+            self.assertNotIn("secret-token", serialized)
+            self.assertTrue(any("继续构建" in message for _stage, _fraction, message in progress))
 
     def test_strict_cheat_labels_reject_japanese_echo_but_preserve_english(self) -> None:
         with TemporaryDirectory() as temporary:

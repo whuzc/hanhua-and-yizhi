@@ -17,6 +17,6 @@ $env:GAME2APK_TRANSLATION_BATCH_SIZE = "20" # 1–100，响应截断时可降到
 
 翻译缓存保存在工具工作区的 `.state/translation-memory.json`，严格作弊标签使用独立缓存命名空间，不会复用旧的普通正文结果。重新构建时相同文本会优先使用已验证缓存；失败的批次会再次请求。
 
-报告中的 `processed` 表示已处理的标签数量，`applied` 表示已通过简体中文校验并实际写入的数量。正文组和标签组分别执行失败率策略：失败数占本组候选块不超过 2%（含恰好 2%）时继续构建，失败块保留原文，并在日志、`translation-report.json` 以及标签组结果 TXT 中列出；严格超过 2% 才停止任务。报告会写入 `failureCount`、`failureRatio` 和 `continuedWithFailures`，方便确认这是“带警告继续”而不是无声丢失。若超过阈值，任务会显示第一条脱敏失败原因并给出报告路径，便于区分响应截断、限流、网络错误和翻译校验失败。API Key 不会写入报告、日志、缓存或命令行。
+报告中的 `processed` 表示已处理的标签数量，`applied` 表示已通过校验并实际写入的数量。正文组和标签组不会再按失败比例阻断构建：任何提供方/校验失败的块都会保留原文，并在日志、`translation-report.json` 以及标签组结果 TXT 中列出；已成功的翻译照常写入并继续生成 APK。报告会写入 `failureCount`、`failureRatio` 和 `continuedWithFailures`，方便确认这是“带警告继续”而不是无声丢失。配置、第三方传输确认、取消、Gradle、签名和静态验收错误仍会中止任务。API Key 不会写入报告、日志、缓存或命令行。
 
 本地回归使用 FakeTransport，不调用真实 DeepSeek。实际构建前请确认第三方传输提示，并在自己的 API 额度和网络条件下运行；不要把 API Key、原游戏资源或生成的 APK 上传到公开仓库。

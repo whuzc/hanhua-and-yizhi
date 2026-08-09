@@ -231,9 +231,9 @@ class TranslationReport:
     api_requests: int = 0
     document_source_path: str | None = None
     document_result_path: str | None = None
-    # Failure accounting is kept on the report so the UI and the saved JSON
-    # can distinguish a tolerated partial translation from a clean pass.
-    # The pipeline applies the 2% stop/continue policy per translation group.
+    # Failure accounting is kept on the report so the UI and saved JSON can
+    # distinguish a partial translation from a clean pass. The pipeline keeps
+    # failed originals and continues artifact generation.
     failure_count: int = 0
     failure_ratio: float = 0.0
     continued_with_failures: bool = False

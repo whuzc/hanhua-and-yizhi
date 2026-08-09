@@ -6,7 +6,6 @@ import hashlib
 import json
 import re
 import threading
-from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
 
@@ -16,7 +15,7 @@ from .errors import BlockedError
 from .inspector import inspect_game
 from .models import BuildConfig, BuildResult, InspectionReport, StageManifest, ToolchainInfo, TranslationReport, VerificationReport
 from .patcher import patch_staged_www
-from .security import atomic_write_json, atomic_write_text, now_utc, redact_text
+from .security import atomic_write_json, atomic_write_text, now_utc
 from .signing import SigningService
 from .staging import StageService
 from .translation import (
@@ -28,7 +27,6 @@ from .translation import (
     filter_cheat_label_entries,
     filter_non_chinese_entries,
     recommend_skip_translation,
-    TRANSLATION_FAILURE_THRESHOLD,
     translation_failure_count,
     translation_failure_ratio,
 )
@@ -144,22 +142,22 @@ class PipelineService:
             **kwargs,
         )
         self._record_translation_modifications(stage, report)
-        self._enforce_translation_failure_policy(report, "正文", kwargs.get("api_key"))
+        self._report_translation_failures(report, "正文")
         return report
 
-    def _enforce_translation_failure_policy(
+    def _report_translation_failures(
         self,
         report: TranslationReport,
         group_name: str,
-        api_key: Any = None,
     ) -> None:
-        """Allow <=2% failures while blocking a materially incomplete group.
+        """Record partial translation failures without suppressing artifacts.
 
         ``TranslationService`` deliberately applies every validated result and
-        leaves failed blocks at their original text.  This policy therefore
-        runs after the report and staged edits exist: a tolerated run still
-        yields an inspectable artifact, while an excessive failure ratio stops
-        before Gradle/signing can produce a misleading release.
+        leaves failed blocks at their original text.  A game author needs to
+        see the generated result even when a provider truncates a large batch,
+        so provider/validation failures never impose an arbitrary percentage
+        gate on Gradle, signing, or verification.  Configuration, consent, and
+        cancellation errors still stop before this point.
         """
 
         failed_count = translation_failure_count(report)
@@ -170,35 +168,17 @@ class PipelineService:
             return
         total = max(0, report.entries_total)
         percent = f"{ratio:.2%}"
-        if ratio <= TRANSLATION_FAILURE_THRESHOLD:
-            report.continued_with_failures = True
-            self.progress(
-                "translate",
-                1.0,
-                f"{group_name} translation completed with warning: "
-                f"{failed_count}/{total} blocks failed ({percent}); original text retained / 保留原文",
-            )
-            # TranslationService already wrote this report, but the pipeline
-            # policy flag is only known here. Persist it for the user's audit.
-            if report.report_path:
-                atomic_write_json(Path(report.report_path), report.to_dict())
-            return
-
-        first_reason = "no successful response was applied"
-        if report.failures:
-            first_reason = str(report.failures[0].reason)
-        secret_values = (str(api_key),) if api_key else ()
-        first_reason = redact_text(first_reason, secret_values)[:240]
-        reason_counts = Counter(str(failure.reason) for failure in report.failures)
-        repeated = ""
-        if reason_counts:
-            repeated = f"; reason count: {reason_counts.most_common(1)[0][1]}"
-        report_hint = f"; report: {report.report_path}" if report.report_path else ""
-        raise BlockedError(
-            f"{group_name} translation stopped: {failed_count}/{total} blocks failed "
-            f"({percent}), exceeding the 2% threshold; first failure: {first_reason}"
-            f"{repeated}{report_hint}"
+        report.continued_with_failures = True
+        self.progress(
+            "translate",
+            1.0,
+            f"{group_name} translation completed with warnings: "
+            f"{failed_count}/{total} blocks retained original text ({percent}) / 保留原文并继续构建",
         )
+        # TranslationService already wrote this report, but the non-blocking
+        # policy flag is only known here. Persist it for the user's audit.
+        if report.report_path:
+            atomic_write_json(Path(report.report_path), report.to_dict())
 
     def cheat_labels_need_translation(self, stage: StageManifest) -> bool:
         """Return whether the mandatory cheat-menu label pass has work."""
@@ -256,7 +236,7 @@ class PipelineService:
             **kwargs,
         )
         self._record_translation_modifications(stage, report)
-        self._enforce_translation_failure_policy(report, "作弊标签", kwargs.get("api_key"))
+        self._report_translation_failures(report, "作弊标签")
         return report
 
     def _record_translation_modifications(self, stage: StageManifest, report: TranslationReport) -> None:
