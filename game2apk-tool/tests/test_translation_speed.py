@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import unittest
@@ -8,7 +9,21 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from game2apk.errors import CancelledError
-from game2apk.translation import DEFAULT_TRANSLATION_MODEL, TranslationService, choose_model, normalize_model
+from game2apk.models import TranslationEntry
+from game2apk.translation import (
+    CHEAT_VISIBLE_SWITCH_LIMIT,
+    CHEAT_VISIBLE_VARIABLE_LIMIT,
+    CHEAT_LABEL_PROMPT_VERSION,
+    DEFAULT_TRANSLATION_MODEL,
+    TranslationMemory,
+    TranslationService,
+    cheat_label_needs_translation,
+    choose_model,
+    filter_cheat_label_entries,
+    normalize_model,
+    translation_memory_key,
+    validate_simplified_chinese_label,
+)
 
 
 class _ParallelTransport:
@@ -61,6 +76,37 @@ class _FailFirstTransport(_ParallelTransport):
             self.failed = True
             raise RuntimeError(f"synthetic provider failure for {api_key}")
         return super().chat(payload, api_key)
+
+
+class _StrictChineseLabelTransport:
+    """Offline provider that emits valid zh-CN labels and preserves controls."""
+
+    def __init__(self, echo: bool = False) -> None:
+        self.calls: list[dict] = []
+        self.echo = echo
+
+    def chat(self, payload: dict, _api_key: str) -> dict:
+        self.calls.append(payload)
+        prompt = payload["messages"][-1]["content"]
+        items = json.loads(prompt.split("INPUT=", 1)[1])
+        translations = []
+        for item in items:
+            segments = []
+            for segment in item["segments"]:
+                if self.echo:
+                    segments.append(segment)
+                    continue
+                controls = re.findall(r"__G2A_TOKEN_\d+__", segment)
+                segments.append("\u4e2d\u6587\u6807\u7b7e" + (" " + " ".join(controls) if controls else ""))
+            translations.append({"id": item["id"], "segments": segments})
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"content": json.dumps({"translations": translations}, ensure_ascii=False)},
+                }
+            ]
+        }
 
 
 class TranslationSpeedTests(unittest.TestCase):
@@ -152,7 +198,7 @@ class TranslationSpeedTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            transport = _ParallelTransport()
+            transport = _StrictChineseLabelTransport()
             report = TranslationService().translate(
                 www,
                 api_key="not-a-real-key",
@@ -164,14 +210,127 @@ class TranslationSpeedTests(unittest.TestCase):
                 batch_size=100,
                 max_concurrency=1,
             )
-            self.assertEqual(report.entries_total, 2)
-            self.assertEqual(report.entries_applied, 2)
+            # Strict cheat-label scope bypasses the generic Han-ratio filter,
+            # so an already-Chinese label is included as well.  This keeps
+            # Kanji-only Japanese labels from being silently skipped.
+            self.assertEqual(report.entries_total, 3)
+            self.assertEqual(report.entries_applied, 3)
+            self.assertTrue(transport.calls)
+            self.assertIn("Simplified Chinese (zh-CN)", transport.calls[0]["messages"][1]["content"])
             system = json.loads((www / "data" / "System.json").read_text(encoding="utf-8"))
-            self.assertEqual(system["variables"][1], "ステEXP淫乱 [zh]")
-            self.assertEqual(system["switches"][1], "ギャラリー解放 [zh]")
+            self.assertEqual(system["variables"][1], "\u4e2d\u6587\u6807\u7b7e")
+            self.assertEqual(system["variables"][2], "\u4e2d\u6587\u6807\u7b7e")
+            self.assertEqual(system["switches"][1], "\u4e2d\u6587\u6807\u7b7e")
             dialogue = json.loads((www / "data" / "Map001.json").read_text(encoding="utf-8"))
             values = [command["parameters"][0] for command in dialogue["events"][1]["pages"][0]["list"] if command["code"] == 401]
             self.assertEqual(values[0], "One")
+
+    def test_strict_cheat_labels_reject_japanese_or_english_echo(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            www = self._www(root)
+            (www / "data" / "System.json").write_text(
+                json.dumps(
+                    {
+                        "gameTitle": "游戏",
+                        "terms": {},
+                        "variables": ["", "犯され中", "Gallery unlocked"],
+                        "switches": [""],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            report = TranslationService().translate(
+                www,
+                api_key="not-a-real-key",
+                transport=_StrictChineseLabelTransport(echo=True),
+                memory_path=root / "memory.json",
+                confirmed_third_party=True,
+                force=True,
+                entry_kinds={"system-variable", "system-switch"},
+                batch_size=100,
+                max_concurrency=1,
+            )
+            self.assertEqual(report.entries_total, 2)
+            self.assertEqual(report.entries_applied, 0)
+            self.assertEqual(len(report.failures), 2)
+            system = json.loads((www / "data" / "System.json").read_text(encoding="utf-8"))
+            self.assertEqual(system["variables"][1], "犯され中")
+            self.assertEqual(system["variables"][2], "Gallery unlocked")
+
+    def test_strict_cache_namespace_does_not_reuse_generic_translation(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            www = self._www(root)
+            (www / "data" / "System.json").write_text(
+                json.dumps(
+                    {"gameTitle": "游戏", "terms": {}, "variables": ["", "Gallery unlocked"], "switches": [""]},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            memory_path = root / "memory.json"
+            from game2apk.translation import extract_safe_entries
+
+            entry = next(item for item in extract_safe_entries(www) if item.kind == "system-variable")
+            memory = TranslationMemory(memory_path)
+            memory.put(
+                translation_memory_key(entry.source_text, "zh-CN", DEFAULT_TRANSLATION_MODEL),
+                entry.entry_id,
+                entry.source_sha256,
+                ["Gallery unlocked"],
+            )
+            memory.save()
+            transport = _StrictChineseLabelTransport()
+            report = TranslationService().translate(
+                www,
+                api_key="not-a-real-key",
+                transport=transport,
+                memory_path=memory_path,
+                confirmed_third_party=True,
+                force=True,
+                entry_kinds={"system-variable", "system-switch"},
+                batch_size=100,
+                max_concurrency=1,
+            )
+            self.assertEqual(report.entries_cached, 0)
+            self.assertTrue(transport.calls)
+            strict_key = translation_memory_key(
+                entry.source_text,
+                "zh-CN",
+                DEFAULT_TRANSLATION_MODEL,
+                prompt_version=CHEAT_LABEL_PROMPT_VERSION,
+            )
+            self.assertIn(strict_key, json.loads(memory_path.read_text(encoding="utf-8"))["entries"])
+
+    def test_strict_validator_allows_game_code_tokens_but_not_english(self) -> None:
+        self.assertTrue(validate_simplified_chinese_label("SE [自定义]", "SE [自定义] ")[0])
+        self.assertTrue(validate_simplified_chinese_label("X/Y 12", "X/Y 12")[0])
+        self.assertFalse(validate_simplified_chinese_label("Gallery unlocked", "Gallery unlocked")[0])
+        self.assertFalse(validate_simplified_chinese_label("犯され中", "犯され中")[0])
+
+    def test_cheat_scope_matches_runtime_limits_and_japanese_signals(self) -> None:
+        variables = [
+            TranslationEntry(
+                f"v{i}", "data/System.json", "system-variable", "variables",
+                [f"变量{i}"], [f"/variables/{i}"], str(i), [[]],
+            )
+            for i in range(CHEAT_VISIBLE_VARIABLE_LIMIT + 20)
+        ]
+        switches = [
+            TranslationEntry(
+                f"s{i}", "data/System.json", "system-switch", "switches",
+                [f"开关{i}"], [f"/switches/{i}"], str(i), [[]],
+            )
+            for i in range(CHEAT_VISIBLE_SWITCH_LIMIT + 20)
+        ]
+        selected = filter_cheat_label_entries(variables + switches)
+        self.assertEqual(sum(item.kind == "system-variable" for item in selected), CHEAT_VISIBLE_VARIABLE_LIMIT)
+        self.assertEqual(sum(item.kind == "system-switch" for item in selected), CHEAT_VISIBLE_SWITCH_LIMIT)
+        self.assertTrue(cheat_label_needs_translation("拘束距離"))
+        self.assertTrue(cheat_label_needs_translation("Gallery unlocked"))
+        self.assertFalse(cheat_label_needs_translation("SE"))
 
     def test_model_aliases_normalize_to_official_identifier(self) -> None:
         self.assertEqual(normalize_model("v4flash"), DEFAULT_TRANSLATION_MODEL)

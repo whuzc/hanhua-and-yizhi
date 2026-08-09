@@ -18,7 +18,14 @@ from .patcher import patch_staged_www
 from .security import atomic_write_json, atomic_write_text, now_utc
 from .signing import SigningService
 from .staging import StageService
-from .translation import TranslationService, extract_safe_entries, filter_non_chinese_entries, recommend_skip_translation
+from .translation import (
+    TranslationService,
+    cheat_label_needs_translation,
+    extract_safe_entries,
+    filter_cheat_label_entries,
+    filter_non_chinese_entries,
+    recommend_skip_translation,
+)
 from .verifier import VerificationService
 
 
@@ -141,7 +148,29 @@ class PipelineService:
             for entry in extract_safe_entries(stage.staged_www)
             if entry.kind in {"system-variable", "system-switch"}
         ]
-        return bool(filter_non_chinese_entries(labels))
+        # The injected menu exposes a bounded, per-kind subset of System.json.
+        # Use the same selector as the strict translation pass; the generic
+        # Han-ratio heuristic incorrectly treats Japanese Kanji-only labels as
+        # already-Chinese and would skip the mandatory pass entirely.
+        visible = filter_cheat_label_entries(labels)
+        locale_is_japanese = False
+        system_path = Path(stage.staged_www) / "data" / "System.json"
+        try:
+            system_data = json.loads(system_path.read_text(encoding="utf-8"))
+            locale_is_japanese = str(system_data.get("locale", "")).casefold().replace("_", "-").startswith("ja")
+        except (OSError, ValueError, TypeError):
+            pass
+        if locale_is_japanese and visible:
+            # Japanese Kanji-only labels can be byte-for-byte identical to
+            # Chinese after normalization, so locale is the only reliable
+            # signal for this edge case.  The strict validator still permits
+            # genuinely Chinese labels to remain unchanged.
+            return True
+        return any(
+            cheat_label_needs_translation(segment)
+            for entry in visible
+            for segment in entry.segments
+        )
 
     def translate_cheat_labels(self, stage: StageManifest, **kwargs: Any) -> TranslationReport:
         """Translate only the labels exposed by the dynamic cheat menu.
@@ -154,6 +183,10 @@ class PipelineService:
         # This pass is always explicit and must not be accidentally disabled
         # by a caller forwarding the optional full-text ``force`` setting.
         kwargs.pop("force", None)
+        # Cheat labels are short and the runtime exposes at most 384 of them;
+        # batching up to the service maximum avoids dozens of tiny requests
+        # while preserving each label as one indivisible segment.
+        kwargs.setdefault("batch_size", 100)
         report = TranslationService(self.progress, self.cancel_event).translate(
             stage.staged_www,
             memory_path=self.state_root / "translation-memory.json",

@@ -23,6 +23,11 @@ from .security import atomic_write_json, redact_text
 
 
 PROMPT_VERSION = "mv-safe-v2-non-chinese"
+# The cheat-label pass has a stricter output contract than ordinary game
+# dialogue.  Keep its cache namespace separate so a previously cached generic
+# translation (which may contain Japanese/English) can never satisfy the
+# mandatory Simplified-Chinese label pass.
+CHEAT_LABEL_PROMPT_VERSION = "mv-safe-v2-cheat-label-zh-cn"
 # DeepSeek V4 Flash is the current fast model used by the optional translation
 # path; thinking is configurable and enabled by default. Keep the public
 # spelling (including hyphens) in
@@ -88,6 +93,24 @@ _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _HAN_RUN_RE = re.compile(r"[\u3400-\u9fff]+")
 _HIRAGANA_RE = re.compile(r"[\u3040-\u309f]")
 _KATAKANA_RE = re.compile(r"[\u30a0-\u30ff\u31f0-\u31ff]")
+_LATIN_TOKEN_RE = re.compile(r"[A-Za-z]+")
+# Common RPG/plugin abbreviations are intentionally allowed to remain (the
+# user-facing contract is to translate definite English words, not familiar
+# stat codes).  Other English words such as ``Gallery`` or ``unlocked`` still
+# fail validation and must be translated.
+_CHEAT_CODE_TOKENS = frozenset(
+    {"atk", "bgm", "bgs", "def", "exp", "hp", "id", "lv", "mp", "se", "sfx", "sp", "x", "y"}
+)
+# Unicode cannot distinguish all Japanese Kanji from Chinese Han.  These are
+# common Japanese shinjitai characters whose simplified-Chinese forms differ;
+# an unchanged label containing one is not accepted as a completed translation.
+_JAPANESE_ONLY_HINTS = frozenset("辺駅験経発時離処気戦円楽応県単覧続広絵図売働変帰後")
+CHEAT_LABEL_KINDS = frozenset({"system-variable", "system-switch", "cheat-field"})
+# The runtime cheat panel exposes the first N non-empty labels, not the whole
+# 2,000-entry System.json arrays.  Keeping this scope bounded saves API calls
+# and makes the build contract match the actual menu.
+CHEAT_VISIBLE_VARIABLE_LIMIT = 256
+CHEAT_VISIBLE_SWITCH_LIMIT = 128
 _TEXT_KEYS = {
     "name",
     "description",
@@ -427,6 +450,103 @@ def filter_non_chinese_entries(
     ]
 
 
+def _cheat_label_latin_tokens(text: str) -> list[str]:
+    """Return Latin words in a dynamic cheat label, excluding controls."""
+
+    # Control codes and tags are executable/display syntax, not translatable
+    # English.  Removing them before tokenising also keeps the validator from
+    # treating a plugin command such as ``\\C[1]`` as a failed label.
+    protected, _tokens = protect_text(text)
+    protected = re.sub(r"__G2A_TOKEN_\d+__", "", protected)
+    return _LATIN_TOKEN_RE.findall(protected)
+
+
+def cheat_label_needs_translation(text: str) -> bool:
+    """Whether a dynamic cheat label contains Japanese or natural-language Latin.
+
+    Han characters are shared by Chinese and Japanese, so a Han-only label is
+    intentionally left alone unless it also carries a Japanese kana signal or
+    a non-code Latin word.  This avoids sending already-Chinese labels to the
+    provider while still catching labels such as ``ステEXP淫乱`` and
+    ``Gallery unlocked``.  ASCII identifiers/abbreviations (SE, EXP, HP,
+    X/Y, numbers, etc.) are allowed and remain byte-for-byte intact.
+    """
+
+    if _HIRAGANA_RE.search(text) or _KATAKANA_RE.search(text):
+        return True
+    if any(char in _JAPANESE_ONLY_HINTS for char in text):
+        return True
+    return any(token.casefold() not in _CHEAT_CODE_TOKENS for token in _cheat_label_latin_tokens(text))
+
+
+def filter_cheat_label_entries(entries: Iterable[TranslationEntry]) -> list[TranslationEntry]:
+    """Select all non-empty dynamic labels for strict zh-CN normalization.
+
+    This intentionally does not call :func:`filter_non_chinese_entries` (or
+    even rely solely on :func:`cheat_label_needs_translation`): Japanese
+    Kanji-only labels have no Unicode signal that distinguishes them from
+    Chinese.  The strict prompt/response validator decides whether an already
+    Chinese label can remain unchanged.
+    """
+
+    candidates = [entry for entry in entries if any(segment.strip() for segment in entry.segments)]
+    selected_ids: set[str] = set()
+    limits = {
+        "system-variable": CHEAT_VISIBLE_VARIABLE_LIMIT,
+        "system-switch": CHEAT_VISIBLE_SWITCH_LIMIT,
+    }
+    for kind, limit in limits.items():
+        kind_entries = [entry for entry in candidates if entry.kind == kind]
+
+        def numeric_location(entry: TranslationEntry) -> tuple[int, str]:
+            try:
+                return int(entry.locations[0].rsplit("/", 1)[-1]), entry.entry_id
+            except (IndexError, ValueError):
+                return 2**31 - 1, entry.entry_id
+
+        selected_ids.update(entry.entry_id for entry in sorted(kind_entries, key=numeric_location)[:limit])
+    # Keep extractor order for stable reports, but choose the same numeric
+    # indices as the JavaScript discover() loop rather than lexicographic
+    # JSON-pointer order (where /variables/10 precedes /variables/2).
+    return [
+        entry
+        for entry in candidates
+        if entry.kind not in limits or entry.entry_id in selected_ids
+    ]
+
+
+def _is_simplified_chinese_target(target_language: str) -> bool:
+    normalized = str(target_language).strip().casefold().replace("_", "-")
+    return normalized in {"zh", "zh-cn", "zh-hans", "简体中文", "simplified-chinese"}
+
+
+def validate_simplified_chinese_label(original: str, translated: str) -> tuple[bool, str]:
+    """Validate the strict output contract for a cheat-menu label.
+
+    This is deliberately conservative: Japanese kana and natural-language
+    Latin words are never accepted, while known game/plugin identifiers and
+    one-letter coordinates remain valid.  A candidate that needed translation
+    must contain at least one Han character after translation, preventing a
+    provider response such as ``Gallery unlocked`` or ``One [zh]`` from being
+    applied as if it were Chinese.
+    """
+
+    if _HIRAGANA_RE.search(translated) or _KATAKANA_RE.search(translated):
+        return False, "cheat label still contains Japanese kana"
+    latin_tokens = _cheat_label_latin_tokens(translated)
+    unexpected = [token for token in latin_tokens if token.casefold() not in _CHEAT_CODE_TOKENS]
+    if unexpected:
+        return False, f"cheat label still contains untranslated Latin word(s): {unexpected!r}"
+    if cheat_label_needs_translation(original) and not _CJK_RE.search(translated):
+        return False, "cheat label translation is not Simplified Chinese"
+    # A provider may echo a candidate verbatim while removing/altering a
+    # marker.  Reject exact echoes for a label that was known to need work;
+    # code-only labels never enter the strict candidate set.
+    if cheat_label_needs_translation(original) and original.strip() == translated.strip():
+        return False, "cheat label was returned unchanged"
+    return True, "ok"
+
+
 def translation_language_profile(entries: Iterable[TranslationEntry], threshold: float = 0.30) -> dict[str, Any]:
     """Return a small, explainable language signal for the inspection UI.
 
@@ -681,7 +801,7 @@ def _content_from_response(data: dict[str, Any]) -> tuple[str, str]:
     return content, reason
 
 
-def _protect_provider_segment(text: str) -> str:
+def _protect_provider_segment(text: str, preserve_han: bool = True) -> str:
     """Protect controls and existing Han runs while retaining context.
 
     The marker format is intentionally opaque and independent from MV control
@@ -691,6 +811,13 @@ def _protect_provider_segment(text: str) -> str:
     """
 
     protected, _tokens = protect_text(text)
+
+    if not preserve_han:
+        # Japanese Kanji are indistinguishable from Chinese Han by Unicode
+        # alone.  The strict cheat-label pass therefore lets the provider see
+        # all Han when a label is being normalized to zh-CN; only executable MV
+        # control markers remain protected.
+        return protected
 
     counter = [0]
 
@@ -704,10 +831,14 @@ def _protect_provider_segment(text: str) -> str:
     return _HAN_RUN_RE.sub(replace_han, protected)
 
 
-def _restore_protected_segment(original: str, translated: str) -> tuple[str | None, str | None]:
+def _restore_protected_segment(
+    original: str,
+    translated: str,
+    preserve_han: bool = True,
+) -> tuple[str | None, str | None]:
     """Restore Han runs and MV controls, rejecting a changed marker safely."""
 
-    original_han = _HAN_RUN_RE.findall(original)
+    original_han = _HAN_RUN_RE.findall(original) if preserve_han else []
     restored = translated
     for index, run in enumerate(original_han):
         marker = f"__G2A_KEEP_HAN_{index:03d}__"
@@ -773,23 +904,39 @@ def _request_batch(
     thinking_enabled: bool,
     reasoning_effort: str,
     cancel_event=None,
+    strict_simplified_chinese: bool = False,
 ) -> dict[str, list[str]]:
     request_items = []
     for entry in entries:
-        protected_segments = [_protect_provider_segment(segment) for segment in entry.segments]
+        protected_segments = [
+            _protect_provider_segment(segment, preserve_han=not strict_simplified_chinese)
+            for segment in entry.segments
+        ]
         request_items.append({"id": entry.entry_id, "segments": protected_segments})
-    prompt = (
-        "Translate only the supplied RPG Maker MV display text into the requested target language. "
-        "Return JSON exactly as {\"translations\":[{\"id\":string,\"segments\":string[]}]}. "
-        "Treat every INPUT item as one coherent dialogue or text block: read all of its segments together "
-        "to preserve context, pronouns, tone, and terminology; never translate word-by-word or as unrelated fragments. "
-        "Existing Chinese (Han) runs are marked __G2A_KEEP_HAN_NNN__ and MUST be copied byte-for-byte; "
-        "translate only the surrounding non-Chinese text. Keep every protected marker unchanged, "
-        "keep each segments array length and order unchanged, "
-        "and preserve the line boundary of every segment. "
-        "Do not translate markers, code, paths, or tags.\n"
-        f"TARGET_LANGUAGE={target_language}\nINPUT=" + json.dumps(request_items, ensure_ascii=False)
-    )
+    if strict_simplified_chinese:
+        prompt = (
+            "Translate every supplied RPG Maker MV cheat-menu label into Simplified Chinese (zh-CN). "
+            "This is a mandatory label-normalization pass, not a word lookup: translate Japanese Kanji, "
+            "hiragana, katakana, and natural-language English into natural Simplified Chinese. "
+            "Do not leave Japanese or English words in the result. Preserve only game/plugin identifiers "
+            "and coordinate/code tokens such as SE, EXP, HP, MP, ATK, DEF, X, Y, IDs, numbers, and "
+            "MV control markers. Return JSON exactly as {\"translations\":[{\"id\":string,\"segments\":string[]}]}. "
+            "Read all segments of one item together, keep the segments array length/order and line boundaries, "
+            "and do not translate markers, code, paths, or tags.\n"
+        )
+    else:
+        prompt = (
+            "Translate only the supplied RPG Maker MV display text into the requested target language. "
+            "Return JSON exactly as {\"translations\":[{\"id\":string,\"segments\":string[]}]}. "
+            "Treat every INPUT item as one coherent dialogue or text block: read all of its segments together "
+            "to preserve context, pronouns, tone, and terminology; never translate word-by-word or as unrelated fragments. "
+            "Existing Chinese (Han) runs are marked __G2A_KEEP_HAN_NNN__ and MUST be copied byte-for-byte; "
+            "translate only the surrounding non-Chinese text. Keep every protected marker unchanged, "
+            "keep each segments array length and order unchanged, "
+            "and preserve the line boundary of every segment. "
+            "Do not translate markers, code, paths, or tags.\n"
+        )
+    prompt += f"TARGET_LANGUAGE={target_language}\nINPUT=" + json.dumps(request_items, ensure_ascii=False)
     payload = {
         "model": model,
         "messages": [
@@ -909,13 +1056,30 @@ class TranslationService:
         reasoning_effort = normalize_reasoning_effort(reasoning_effort)
         model = normalize_model(model)
         source_entries = extract_safe_entries(www)
+        allowed_kinds: set[str] | None = None
         if entry_kinds is not None:
             allowed_kinds = {str(kind) for kind in entry_kinds}
             source_entries = [entry for entry in source_entries if entry.kind in allowed_kinds]
+        strict_simplified_chinese = bool(
+            allowed_kinds
+            and allowed_kinds <= CHEAT_LABEL_KINDS
+            and _is_simplified_chinese_target(target_language)
+        )
         # Translation is opt-in, but even an explicit opt-in must never send
         # already-Chinese-only blocks for rewriting.  Mixed blocks remain
         # coherent context and have Han runs protected in _request_batch.
-        entries = filter_non_chinese_entries(source_entries)
+        # Cheat labels use a stricter selector: a Japanese label containing
+        # only Kanji is indistinguishable from Chinese at the Unicode level,
+        # so the caller's explicit cheat-label scope must bypass the general
+        # Han-ratio heuristic entirely.  Every non-empty variable/switch label
+        # is sent through the strict zh-CN contract; already-Chinese labels are
+        # accepted unchanged by the validator, while Japanese/English labels
+        # cannot pass unless the provider returns Chinese.
+        entries = (
+            filter_cheat_label_entries(source_entries)
+            if strict_simplified_chinese
+            else filter_non_chinese_entries(source_entries)
+        )
         candidate_ids = {entry.entry_id for entry in entries}
         skipped_chinese = sum(
             1
@@ -924,7 +1088,7 @@ class TranslationService:
             and any(_CJK_RE.search(segment) for segment in entry.segments)
         )
         skipped_non_text = max(0, len(source_entries) - len(entries) - skipped_chinese)
-        recommended = recommend_skip_translation(source_entries)
+        recommended = False if strict_simplified_chinese else recommend_skip_translation(source_entries)
         report = TranslationReport(
             schema_version=1,
             source_language="zh-CN" if recommended else "unknown",
@@ -948,7 +1112,7 @@ class TranslationService:
                 f"no non-Chinese text selected; preserved {skipped_chinese} Chinese blocks and {skipped_non_text} non-text blocks",
             )
             return report
-        if recommended and not force:
+        if recommended and not force and not strict_simplified_chinese:
             self.progress(
                 "translate",
                 1.0,
@@ -968,17 +1132,27 @@ class TranslationService:
         model = model or DEFAULT_TRANSLATION_MODEL
         report.model = model
         memory = TranslationMemory(memory_path or (Path(www).parent / ".state" / "translation-memory.json"))
+        memory_prompt_version = CHEAT_LABEL_PROMPT_VERSION if strict_simplified_chinese else PROMPT_VERSION
         translations: dict[str, list[str]] = {}
         # Group identical source blocks before making requests.  RPG Maker
         # projects often repeat common labels; translating one representative
         # and reusing it preserves order while removing duplicate API work.
         pending_groups: dict[str, list[TranslationEntry]] = {}
         for entry in entries:
-            key = translation_memory_key(entry.source_text, target_language, model)
+            key = translation_memory_key(
+                entry.source_text,
+                target_language,
+                model,
+                prompt_version=memory_prompt_version,
+            )
             cached = memory.get(key)
             if cached is not None and len(cached) == len(entry.segments) and all(
                 validate_placeholders(original, translated)[0]
-                and _han_runs_preserved(original, translated)
+                and (
+                    validate_simplified_chinese_label(original, translated)[0]
+                    if strict_simplified_chinese
+                    else _han_runs_preserved(original, translated)
+                )
                 for original, translated in zip(entry.segments, cached)
             ):
                 translations[entry.entry_id] = cached
@@ -1017,6 +1191,7 @@ class TranslationService:
                         thinking_enabled,
                         reasoning_effort,
                         self.cancel_event,
+                        strict_simplified_chinese,
                     )
                     for batch in batches
                 ]
@@ -1068,13 +1243,25 @@ class TranslationService:
                                 continue
                             restored: list[str] = []
                             for original, translated in zip(entry.segments, candidate):
-                                restored_segment, protected_error = _restore_protected_segment(original, translated)
+                                restored_segment, protected_error = _restore_protected_segment(
+                                    original,
+                                    translated,
+                                    preserve_han=not strict_simplified_chinese,
+                                )
                                 if protected_error or restored_segment is None:
                                     invalid_reason = protected_error or "protected text restoration failed"
                                     break
-                                if not _han_runs_preserved(original, restored_segment):
+                                if not strict_simplified_chinese and not _han_runs_preserved(original, restored_segment):
                                     invalid_reason = "Chinese text changed in provider response"
                                     break
+                                if strict_simplified_chinese:
+                                    valid_label, label_reason = validate_simplified_chinese_label(
+                                        original,
+                                        restored_segment,
+                                    )
+                                    if not valid_label:
+                                        invalid_reason = label_reason
+                                        break
                                 restored.append(restored_segment)
                             else:
                                 invalid_reason = next(

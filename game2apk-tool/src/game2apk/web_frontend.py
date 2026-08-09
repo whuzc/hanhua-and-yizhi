@@ -37,7 +37,9 @@ from .toolchain import COMPONENTS, discover_configured, download_component, load
 from .translation import (
     DEFAULT_TRANSLATION_REASONING_EFFORT,
     DEFAULT_TRANSLATION_THINKING_ENABLED,
+    cheat_label_needs_translation,
     extract_safe_entries,
+    filter_cheat_label_entries,
     filter_non_chinese_entries,
     normalize_reasoning_effort,
     translation_language_profile,
@@ -118,8 +120,19 @@ def _translation_profile_for_report(report: Any, progress: Callable[[str, float,
             and any("\u3400" <= char <= "\u9fff" for segment in entry.segments for char in segment)
         )
         profile["nonTextEntries"] = max(0, len(entries) - len(candidate_entries) - profile["chineseOnlyEntries"])
-        profile["cheatLabelEntries"] = len(cheat_entries)
-        profile["cheatLabelsNeedTranslation"] = bool(filter_non_chinese_entries(cheat_entries))
+        visible_cheat_entries = filter_cheat_label_entries(cheat_entries)
+        locale_is_japanese = False
+        try:
+            system_data = json.loads((Path(www_root) / "data" / "System.json").read_text(encoding="utf-8"))
+            locale_is_japanese = str(system_data.get("locale", "")).casefold().replace("_", "-").startswith("ja")
+        except (OSError, ValueError, TypeError):
+            pass
+        profile["cheatLabelEntries"] = len(visible_cheat_entries)
+        profile["cheatLabelsNeedTranslation"] = bool(visible_cheat_entries) if locale_is_japanese else any(
+            cheat_label_needs_translation(segment)
+            for entry in visible_cheat_entries
+            for segment in entry.segments
+        )
     except (OSError, ValueError, TypeError):
         return {"status": "unavailable", "defaultTranslate": False}
     profile["status"] = "detected"

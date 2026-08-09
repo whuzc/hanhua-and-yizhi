@@ -283,6 +283,27 @@ class PipelineTests(unittest.TestCase):
         self.assertIn(("system-switch", "/switches/1", "回想解锁"), labels)
         self.assertIn(("system-switch", "/switches/2", "Gallery unlocked"), labels)
 
+    def test_japanese_locale_triggers_strict_cheat_pass_for_han_only_labels(self) -> None:
+        from types import SimpleNamespace
+
+        labels_www = self.root / "ja-labels-www"
+        (labels_www / "data").mkdir(parents=True)
+        (labels_www / "data" / "System.json").write_text(
+            json.dumps(
+                {
+                    "locale": "ja_JP",
+                    "gameTitle": "Demo",
+                    "terms": {},
+                    "variables": ["", "拘束中", "淫乱"],
+                    "switches": ["", "屋外"],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        stage = SimpleNamespace(staged_www=str(labels_www))
+        self.assertTrue(PipelineService(self.root).cheat_labels_need_translation(stage))
+
     def test_japanese_kana_prevents_chinese_skip_heuristic(self) -> None:
         entries = extract_safe_entries(self.www)
         self.assertTrue(any("Hello world" in entry.source_text for entry in entries))
