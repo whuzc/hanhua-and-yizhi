@@ -139,10 +139,32 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("/api/heartbeat", js)
         self.assertIn("X-Game2Apk-Request", js)
         self.assertIn("downloadToolchain", js)
-        self.assertIn("setText(description, detail)", js)
+        self.assertIn("setText(description, detailText)", js)
         self.assertNotIn("report.innerHTML", js)
         self.assertNotIn(".rpgsave", html + css + js)
         self.assertNotIn("api_key", html + css + js)
+
+    def test_report_log_has_bounded_window_and_respects_manual_scroll(self) -> None:
+        css = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+        js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        # The report must remain a viewport instead of growing the page for a
+        # long translation/build run.
+        self.assertIn("MAX_LOG_ENTRIES = 80", js)
+        self.assertIn("MAX_LOG_CHARS = 24000", js)
+        self.assertIn("MAX_LOG_DETAIL_CHARS = 4200", js)
+        self.assertIn("while (report.children.length > MAX_LOG_ENTRIES || report.textContent.length > MAX_LOG_CHARS)", js)
+        self.assertIn("height: 220px", css)
+        self.assertIn("max-height: min(32vh, 280px)", css)
+        self.assertIn("overflow-y: auto", css)
+        self.assertIn("overscroll-behavior: contain", css)
+        # New entries follow the bottom only when the reader is already there;
+        # scrolling upward preserves the approximate viewport while old rows
+        # are evicted from the bounded window.
+        self.assertIn("report.addEventListener(\"scroll\", updateReportScrollMode", js)
+        self.assertIn("const shouldStick = reportStickToBottom || isReportNearBottom();", js)
+        self.assertIn("report.scrollTop = Math.max(0, previousScrollTop - removedHeight);", js)
+        self.assertIn("自动跟随最新进度", js)
+        self.assertIn("已暂停自动滚动", js)
 
     def test_launcher_rejects_non_loopback_ready_urls(self) -> None:
         import sys

@@ -68,6 +68,23 @@ h1 { font-size: 18px; line-height: 1.1; letter-spacing: -.02em; } h1 span { colo
 .progress-meta { display: flex; align-items: center; justify-content: space-between; margin-top: 13px; color: var(--muted); font-size: 11px; font-weight: 700; }
 .report-log { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 8px; padding: 10px; }
 .report-log .empty-state { margin: auto; }
+.report-log {
+  /* A fixed viewport keeps long translation/build runs from stretching the
+     whole page.  The log itself remains keyboard/mouse scrollable. */
+  height: 220px;
+  min-height: 150px;
+  max-height: min(32vh, 280px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(46,181,149,.52) transparent;
+}
+.report-log::-webkit-scrollbar { width: 8px; }
+.report-log::-webkit-scrollbar-track { background: transparent; }
+.report-log::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 99px; background: rgba(46,181,149,.42); background-clip: padding-box; }
+.report-log[data-following="false"] { border-color: rgba(212,164,59,.38); }
 .log-entry { display: grid; gap: 3px; padding: 9px 10px; border: 1px solid rgba(105,181,160,.14); border-left: 3px solid rgba(46,181,149,.46); border-radius: 11px; background: rgba(255,255,255,.48); color: var(--ink); animation: log-enter 180ms var(--ease-out) both; }
 .log-entry strong { font-size: 11px; }
 .log-entry small { color: var(--muted); font: 10px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }

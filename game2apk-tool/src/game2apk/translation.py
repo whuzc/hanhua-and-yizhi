@@ -5,12 +5,15 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+import math
 import os
+import random
 import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
 
@@ -20,6 +23,49 @@ from .security import atomic_write_json, redact_text
 
 
 PROMPT_VERSION = "mv-safe-v1"
+# DeepSeek V4 Flash is the current fast model used by the optional translation
+# path; requests explicitly select its non-thinking mode. Keep the public
+# spelling (including hyphens) in
+# cache keys and reports: it is the identifier accepted by the OpenAI-compatible
+# DeepSeek endpoint, while ``v4flash`` is accepted below as a convenience alias.
+DEFAULT_TRANSLATION_MODEL = "deepseek-v4-flash"
+DEFAULT_TRANSLATION_BATCH_SIZE = 20
+DEFAULT_TRANSLATION_CONCURRENCY = 4
+MAX_TRANSLATION_BATCH_SIZE = 100
+MAX_TRANSLATION_CONCURRENCY = 8
+_TRANSIENT_HTTP_STATUSES = {408, 425, 429, 500, 502, 503, 504}
+
+
+def _retry_delay(attempt: int, retry_after: float | None = None) -> float:
+    """Return a short exponential backoff with bounded jitter."""
+
+    base = retry_after if retry_after is not None else min(2.0**attempt, 8.0)
+    # A little jitter prevents several concurrent batches from retrying in a
+    # thundering herd after the same 429/5xx response.
+    return max(0.0, min(base, 30.0)) + random.uniform(0.0, min(0.5, max(0.05, base * 0.2)))
+
+
+def _wait_for_retry(cancel_event: Any, delay: float) -> None:
+    """Sleep while remaining responsive to the pipeline cancellation event."""
+
+    if cancel_event is not None and hasattr(cancel_event, "wait"):
+        if cancel_event.wait(delay):
+            raise CancelledError("translation cancelled")
+    else:
+        time.sleep(delay)
+
+
+def _setting_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    """Read an optional integer tuning knob without trusting environment input."""
+
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(minimum, min(maximum, value))
 _CONTROL_RE = re.compile(r"\\[A-Za-z]+(?:\[[^\]]*\])?|%\d+|\{\d+\}|\{\{[^{}]+\}\}|<[^>]+>|\\[nrt\\\"']")
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _HIRAGANA_RE = re.compile(r"[\u3040-\u309f]")
@@ -349,9 +395,21 @@ class TranslationTransport(Protocol):
 
 
 class DeepSeekHTTPError(TranslationError):
-    def __init__(self, status: int, message: str):
+    def __init__(self, status: int, message: str, retry_after: float | None = None):
         super().__init__(message)
         self.status = status
+        # Retry-After is provider-controlled input.  Keep it bounded and
+        # numeric so a malformed response cannot make a local build sleep for
+        # an unbounded amount of time.
+        try:
+            candidate = float(retry_after) if retry_after is not None else None
+        except (TypeError, ValueError):
+            candidate = None
+        self.retry_after = (
+            max(0.0, min(candidate, 30.0))
+            if candidate is not None and math.isfinite(candidate)
+            else None
+        )
 
 
 class DeepSeekTransport:
@@ -378,7 +436,20 @@ class DeepSeekTransport:
                 detail = exc.read().decode("utf-8", errors="replace")[:500]
             except OSError:
                 detail = "HTTP error"
-            raise DeepSeekHTTPError(exc.code, f"DeepSeek HTTP {exc.code}: {redact_text(detail)}") from exc
+            retry_after: float | None = None
+            try:
+                header = exc.headers.get("Retry-After") if exc.headers is not None else None
+                if header is not None:
+                    retry_after = float(header)
+            except (TypeError, ValueError):
+                # HTTP-date values and malformed headers are intentionally
+                # ignored; exponential backoff remains the safe fallback.
+                retry_after = None
+            raise DeepSeekHTTPError(
+                exc.code,
+                f"DeepSeek HTTP {exc.code}: {redact_text(detail)}",
+                retry_after=retry_after,
+            ) from exc
         except urllib.error.URLError as exc:
             raise TranslationError(f"DeepSeek connection failed: {redact_text(exc.reason)}") from exc
         try:
@@ -397,9 +468,9 @@ class DeepSeekTransport:
                 break
             except DeepSeekHTTPError as exc:
                 last_error = exc
-                if exc.status not in {429, 500, 503} or attempt == 2:
+                if exc.status not in _TRANSIENT_HTTP_STATUSES or attempt == 2:
                     raise
-                time.sleep(min(2**attempt, 4))
+                _wait_for_retry(None, _retry_delay(attempt, exc.retry_after))
         else:
             raise TranslationError(str(last_error or "DeepSeek /models failed"))
         models = data.get("data")
@@ -440,14 +511,30 @@ class FakeTransport:
         return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps({"translations": translations}, ensure_ascii=False)}}]}
 
 
+def normalize_model(model: str | None) -> str | None:
+    """Normalize friendly V4 Flash spellings to the official API identifier."""
+
+    if model is None:
+        return None
+    text = model.strip()
+    aliases = {
+        "v4flash": DEFAULT_TRANSLATION_MODEL,
+        "v4-flash": DEFAULT_TRANSLATION_MODEL,
+        "deepseek-v4flash": DEFAULT_TRANSLATION_MODEL,
+        "deepseek_v4_flash": DEFAULT_TRANSLATION_MODEL,
+    }
+    return aliases.get(text.casefold(), text)
+
+
 def choose_model(models: list[str], requested: str | None = None) -> str:
+    requested = normalize_model(requested)
     if requested:
         return requested
     if not models:
         raise ConfigurationError("no DeepSeek model is available; specify a model manually")
-    preferred = [name for name in models if name.casefold() == "deepseek-v4-flash"]
+    preferred = [name for name in models if normalize_model(name) == DEFAULT_TRANSLATION_MODEL]
     if preferred:
-        return preferred[0]
+        return normalize_model(preferred[0]) or DEFAULT_TRANSLATION_MODEL
     non_reasoning = [name for name in models if "reason" not in name.casefold() and "think" not in name.casefold()]
     return sorted(non_reasoning or models)[0]
 
@@ -513,9 +600,17 @@ def _request_batch(transport: TranslationTransport, api_key: str, model: str, ta
             {"role": "user", "content": prompt},
         ],
         "response_format": {"type": "json_object"},
+        # V4 models default to thinking mode.  Translation is a constrained
+        # JSON transformation, so explicitly selecting non-thinking mode cuts
+        # latency and avoids paying for unused reasoning tokens.
+        "thinking": {"type": "disabled"},
         "temperature": 0.1,
         "stream": False,
     }
+    # Keep output bounded to the amount of text requested while leaving room
+    # for JSON punctuation and a modest expansion into the target language.
+    estimated_chars = sum(len(segment) for entry in entries for segment in entry.segments)
+    payload["max_tokens"] = min(131072, max(512, estimated_chars * 2 + 512))
     if cancel_event is not None and cancel_event.is_set():
         raise CancelledError("translation cancelled")
     last_error: Exception | None = None
@@ -526,9 +621,9 @@ def _request_batch(transport: TranslationTransport, api_key: str, model: str, ta
             return _parse_translation_json(content, {entry.entry_id for entry in entries})
         except DeepSeekHTTPError as exc:
             last_error = exc
-            if exc.status not in {429, 500, 503} or attempt == 2:
+            if exc.status not in _TRANSIENT_HTTP_STATUSES or attempt == 2:
                 raise
-            time.sleep(min(2**attempt, 4))
+            _wait_for_retry(cancel_event, _retry_delay(attempt, exc.retry_after))
         except TranslationError as exc:
             last_error = exc
             raise
@@ -592,15 +687,29 @@ class TranslationService:
         memory_path: str | Path | None = None,
         confirmed_third_party: bool = False,
         force: bool = False,
-        batch_size: int = 20,
+        batch_size: int = DEFAULT_TRANSLATION_BATCH_SIZE,
+        max_concurrency: int = DEFAULT_TRANSLATION_CONCURRENCY,
     ) -> TranslationReport:
+        batch_size = _setting_int(
+            "GAME2APK_TRANSLATION_BATCH_SIZE",
+            batch_size,
+            1,
+            MAX_TRANSLATION_BATCH_SIZE,
+        )
+        max_concurrency = _setting_int(
+            "GAME2APK_TRANSLATION_CONCURRENCY",
+            max_concurrency,
+            1,
+            MAX_TRANSLATION_CONCURRENCY,
+        )
+        model = normalize_model(model)
         entries = extract_safe_entries(www)
         recommended = recommend_skip_translation(entries)
         report = TranslationReport(
             schema_version=1,
             source_language="zh-CN" if recommended else "unknown",
             target_language=target_language,
-            model=model or "unselected",
+            model=model or DEFAULT_TRANSLATION_MODEL,
             entries_total=len(entries),
             entries_applied=0,
             entries_cached=0,
@@ -617,12 +726,17 @@ class TranslationService:
             api_key = os.environ.get("DEEPSEEK_API_KEY")
         if api_key is None:
             raise ConfigurationError("DeepSeek API key must be provided in memory or DEEPSEEK_API_KEY")
-        if model is None:
-            model = choose_model(transport.list_models(api_key))
-            report.model = model
+        # V4 Flash is an official stable model identifier.  Avoid a separate
+        # /models round-trip for every build; callers can still explicitly pass
+        # another model when they need one.
+        model = model or DEFAULT_TRANSLATION_MODEL
+        report.model = model
         memory = TranslationMemory(memory_path or (Path(www).parent / ".state" / "translation-memory.json"))
         translations: dict[str, list[str]] = {}
-        pending: list[TranslationEntry] = []
+        # Group identical source blocks before making requests.  RPG Maker
+        # projects often repeat common labels; translating one representative
+        # and reusing it preserves order while removing duplicate API work.
+        pending_groups: dict[str, list[TranslationEntry]] = {}
         for entry in entries:
             key = translation_memory_key(entry.source_text, target_language, model)
             cached = memory.get(key)
@@ -632,42 +746,138 @@ class TranslationService:
                 translations[entry.entry_id] = cached
                 report.entries_cached += 1
             else:
-                pending.append(entry)
-        for offset in range(0, len(pending), max(1, batch_size)):
-            if self.cancel_event is not None and self.cancel_event.is_set():
-                raise CancelledError("translation cancelled")
-            batch = pending[offset : offset + max(1, batch_size)]
-            try:
-                batch_translations = _request_batch(transport, api_key, model, target_language, batch, self.cancel_event)
-            except TranslationError as exc:
-                for entry in batch:
-                    report.failures.append(TranslationFailure(entry.entry_id, redact_text(str(exc)), entry.source_text))
-                continue
-            for entry in batch:
-                candidate = batch_translations.get(entry.entry_id)
-                if candidate is None or len(candidate) != len(entry.segments):
-                    report.failures.append(TranslationFailure(entry.entry_id, "missing or mismatched response entry", entry.source_text))
-                    continue
-                restored: list[str] = []
-                for original, translated in zip(entry.segments, candidate):
-                    _, original_tokens = protect_text(original)
-                    restored_segment = translated
-                    for token_index, original_token in enumerate(original_tokens):
-                        restored_segment = restored_segment.replace(f"__G2A_TOKEN_{token_index:03d}__", original_token)
-                    restored.append(restored_segment)
-                candidate = restored
-                invalid_reason = next(
-                    (reason for original, translated in zip(entry.segments, candidate) if not (ok := validate_placeholders(original, translated))[0] for reason in [ok[1]]),
-                    None,
-                )
-                if invalid_reason:
-                    report.failures.append(TranslationFailure(entry.entry_id, invalid_reason, entry.source_text))
-                    continue
-                translations[entry.entry_id] = candidate
-                memory.put(translation_memory_key(entry.source_text, target_language, model), entry.entry_id, entry.source_sha256, candidate)
-            memory.save()
-            self.progress("translate", min(1.0, (offset + len(batch)) / max(1, len(pending))), f"translated {offset + len(batch)}/{len(pending)} blocks")
+                pending_groups.setdefault(key, []).append(entry)
 
+        pending = [(key, group) for key, group in pending_groups.items()]
+        duplicate_count = sum(max(0, len(group) - 1) for _key, group in pending)
+        if pending:
+            self.progress(
+                "translate",
+                report.entries_cached / max(1, len(entries)),
+                f"translation queued: {len(pending)} unique blocks ({duplicate_count} duplicates reused)",
+            )
+
+        batches = [pending[offset : offset + batch_size] for offset in range(0, len(pending), batch_size)]
+        executor: ThreadPoolExecutor | None = None
+        futures: list[Any] = []
+        cancelled = False
+        processed_entries = 0
+        try:
+            if batches:
+                executor = ThreadPoolExecutor(
+                    max_workers=min(max_concurrency, len(batches)),
+                    thread_name_prefix="game2apk-translate",
+                )
+                futures = [
+                    executor.submit(
+                        _request_batch,
+                        transport,
+                        api_key,
+                        model,
+                        target_language,
+                        [group[0] for _key, group in batch],
+                        self.cancel_event,
+                    )
+                    for batch in batches
+                ]
+
+                def record_batch_failure(batch, reason: str) -> None:
+                    safe_reason = redact_text(reason, (api_key,))
+                    for _key, group in batch:
+                        for duplicate in group:
+                            report.failures.append(
+                                TranslationFailure(duplicate.entry_id, safe_reason, duplicate.source_text)
+                            )
+
+                # Consume futures in submission order.  Requests run in
+                # parallel, but applying results in source order keeps output,
+                # reports, cache writes, and progress deterministic.
+                for batch, future in zip(batches, futures):
+                    batch_translations: dict[str, list[str]] | None = None
+                    while True:
+                        if self.cancel_event is not None and self.cancel_event.is_set():
+                            raise CancelledError("translation cancelled")
+                        try:
+                            batch_translations = future.result(timeout=0.2)
+                            break
+                        except FutureTimeout:
+                            continue
+                        except CancelledError:
+                            raise
+                        except Exception as exc:
+                            # A transport failure belongs to this batch only;
+                            # continue consuming later batches in source order.
+                            record_batch_failure(batch, str(exc))
+                            processed_entries += sum(len(group) for _key, group in batch)
+                            memory.save()
+                            completed = report.entries_cached + processed_entries
+                            self.progress(
+                                "translate",
+                                min(1.0, completed / max(1, len(entries))),
+                                f"translated {min(len(entries), completed)}/{len(entries)} blocks",
+                            )
+                            break
+                    if batch_translations is None:
+                        continue
+                    try:
+                        for key, group in batch:
+                            entry = group[0]
+                            candidate = batch_translations.get(entry.entry_id)
+                            if candidate is None or len(candidate) != len(entry.segments):
+                                record_batch_failure([(key, group)], "missing or mismatched response entry")
+                                continue
+                            restored: list[str] = []
+                            for original, translated in zip(entry.segments, candidate):
+                                _, original_tokens = protect_text(original)
+                                restored_segment = translated
+                                for token_index, original_token in enumerate(original_tokens):
+                                    restored_segment = restored_segment.replace(
+                                        f"__G2A_TOKEN_{token_index:03d}__", original_token
+                                    )
+                                restored.append(restored_segment)
+                            invalid_reason = next(
+                                (
+                                    reason
+                                    for original, translated in zip(entry.segments, restored)
+                                    if not (ok := validate_placeholders(original, translated))[0]
+                                    for reason in [ok[1]]
+                                ),
+                                None,
+                            )
+                            if invalid_reason:
+                                record_batch_failure([(key, group)], invalid_reason)
+                                continue
+                            for duplicate in group:
+                                translations[duplicate.entry_id] = list(restored)
+                            memory.put(key, entry.entry_id, entry.source_sha256, restored)
+                    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                        # A malformed provider payload must not abort unrelated
+                        # batches; report it against this batch without exposing
+                        # the API key.
+                        record_batch_failure(batch, str(exc))
+                    except TranslationError as exc:
+                        # Transport errors are isolated to this batch.  Other
+                        # concurrently running requests remain useful.
+                        record_batch_failure(batch, str(exc))
+                    processed_entries += sum(len(group) for _key, group in batch)
+                    memory.save()
+                    completed = report.entries_cached + processed_entries
+                    self.progress(
+                        "translate",
+                        min(1.0, completed / max(1, len(entries))),
+                        f"translated {min(len(entries), completed)}/{len(entries)} blocks",
+                    )
+        except CancelledError:
+            cancelled = True
+            for future in futures:
+                future.cancel()
+            raise
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=not cancelled, cancel_futures=cancelled)
+
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise CancelledError("translation cancelled")
         apply_failures = apply_translations(www, entries, translations)
         report.failures.extend(apply_failures)
         report.entries_applied = len(translations) - len(apply_failures)

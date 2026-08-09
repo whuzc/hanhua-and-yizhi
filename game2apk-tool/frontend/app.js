@@ -15,12 +15,22 @@
   const downloadButtons = [$("#download-android"), $("#download-jdk")];
   const root = document.documentElement;
 
+  // Keep the report useful during long translation/build runs.  The backend
+  // only publishes the current job state; this bounded client-side window
+  // prevents an ever-growing DOM when a task emits many progress messages.
+  const MAX_LOG_ENTRIES = 80;
+  const MAX_LOG_CHARS = 24000;
+  const MAX_LOG_TITLE_CHARS = 240;
+  const MAX_LOG_DETAIL_CHARS = 4200;
+  const REPORT_SCROLL_THRESHOLD_PX = 28;
+
   let currentJobId = null;
   let currentJobKind = null;
   let pollTimer = null;
   let heartbeatTimer = null;
   let inspected = false;
   let lastJobMessage = "";
+  let reportStickToBottom = true;
 
   const setText = (node, value) => { node.textContent = value == null ? "" : String(value); };
 
@@ -68,21 +78,74 @@
     downloadButtons.forEach((button) => { button.disabled = running; });
   };
 
-  const clearLog = () => report.replaceChildren();
+  const isReportNearBottom = () => (
+    report.scrollHeight - report.scrollTop - report.clientHeight <= REPORT_SCROLL_THRESHOLD_PX
+  );
+
+  const updateReportScrollMode = () => {
+    reportStickToBottom = isReportNearBottom();
+    // This state is useful to screen-reader and automated UI consumers, while
+    // avoiding an intrusive visible "follow" control for the compact panel.
+    report.dataset.following = String(reportStickToBottom);
+  };
+
+  const clearLog = () => {
+    report.replaceChildren();
+    reportStickToBottom = true;
+    report.dataset.following = "true";
+  };
+
+  const truncateLogText = (value, limit) => {
+    const text = value == null ? "" : String(value);
+    if (text.length <= limit) return text;
+    return `${text.slice(0, Math.max(0, limit - 22))}\n…（内容过长，已截断）`;
+  };
+
+  const updateReportCount = () => {
+    const entries = report.querySelectorAll(".log-entry");
+    const count = entries.length;
+    const chars = report.textContent.length;
+    report.dataset.logCount = String(count);
+    report.dataset.logChars = String(chars);
+    report.setAttribute(
+      "aria-label",
+      `构建报告，保留 ${count} 条日志，约 ${chars} 个字符${reportStickToBottom ? "，自动跟随最新进度" : "，已暂停自动滚动"}`,
+    );
+  };
 
   const log = (title, detail = "", kind = "info") => {
     if (report.querySelector(".empty-state")) clearLog();
+    const shouldStick = reportStickToBottom || isReportNearBottom();
+    const previousScrollTop = report.scrollTop;
+    const titleText = truncateLogText(title, MAX_LOG_TITLE_CHARS);
+    const detailText = truncateLogText(detail, MAX_LOG_DETAIL_CHARS);
     const entry = document.createElement("article");
     entry.className = `log-entry log-${kind}`;
     const heading = document.createElement("strong");
     const description = document.createElement("small");
-    setText(heading, title);
-    setText(description, detail);
+    setText(heading, titleText);
+    setText(description, detailText);
     entry.append(heading, description);
     report.append(entry);
-    while (report.children.length > 80) report.removeChild(report.firstChild);
-    report.scrollTop = report.scrollHeight;
-    setText(reportState, title);
+    let removedHeight = 0;
+    while (report.children.length > MAX_LOG_ENTRIES || report.textContent.length > MAX_LOG_CHARS) {
+      const first = report.querySelector(".log-entry");
+      if (!first) break;
+      // Preserve the reader's approximate viewport when old entries are
+      // evicted while they are manually browsing an earlier portion.
+      removedHeight += first.getBoundingClientRect().height;
+      first.remove();
+    }
+    if (shouldStick) {
+      report.scrollTop = report.scrollHeight;
+      reportStickToBottom = true;
+    } else {
+      report.scrollTop = Math.max(0, previousScrollTop - removedHeight);
+      reportStickToBottom = false;
+    }
+    report.dataset.following = String(reportStickToBottom);
+    updateReportCount();
+    setText(reportState, titleText);
   };
 
   const readablePath = (value, fallback) => value && String(value).trim() ? String(value) : fallback;
@@ -330,6 +393,11 @@
   };
 
   const init = async () => {
+    // Follow live progress only while the reader is already at the bottom.
+    // Scrolling upward turns the report into a stable viewport until the
+    // reader returns near the end, so rapid polling never steals their place.
+    report.addEventListener("scroll", updateReportScrollMode, { passive: true });
+    updateReportCount();
     $("#motion-button").addEventListener("click", () => {
       const reduce = root.dataset.reduceMotion !== "true";
       root.dataset.reduceMotion = String(reduce);

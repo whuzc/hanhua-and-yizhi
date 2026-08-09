@@ -13,6 +13,7 @@ from .errors import Game2ApkError
 from .models import BuildConfig
 from .pipeline import PipelineService, stage_manifest_from_dict
 from .security import read_secret_source, redact_text
+from .translation import DEFAULT_TRANSLATION_MODEL
 from .verifier import VerificationService
 
 
@@ -149,7 +150,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     translate_parser = sub.add_parser("translate", help="translate safe MV fields; default skips Chinese projects")
     translate_parser.add_argument("--www", required=True)
-    translate_parser.add_argument("--model")
+    translate_parser.add_argument(
+        "--model",
+        default=DEFAULT_TRANSLATION_MODEL,
+        help=f"DeepSeek model identifier (default: {DEFAULT_TRANSLATION_MODEL}; v4flash is accepted as an alias)",
+    )
     translate_parser.add_argument("--target-language", default="zh-CN")
     translate_parser.add_argument("--force", action="store_true")
     translate_parser.add_argument("--confirm-third-party", action="store_true")
