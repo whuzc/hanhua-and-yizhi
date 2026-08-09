@@ -207,6 +207,12 @@ class TranslationReport:
     report_path: str | None = None
     thinking_enabled: bool = True
     reasoning_effort: str = "high"
+    # ``entries_total`` is the number of candidate blocks that can contain
+    # non-Chinese text and may be sent to the provider.  Keep the source-wide
+    # count separately so the UI can explain why the numbers differ.
+    source_entries_total: int | None = None
+    entries_skipped_chinese: int = 0
+    entries_skipped_non_text: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -224,6 +230,9 @@ class TranslationReport:
             "reportPath": self.report_path,
             "thinkingEnabled": self.thinking_enabled,
             "reasoningEffort": self.reasoning_effort,
+            "sourceEntriesTotal": self.source_entries_total if self.source_entries_total is not None else self.entries_total,
+            "entriesSkippedChinese": self.entries_skipped_chinese,
+            "entriesSkippedNonText": self.entries_skipped_non_text,
         }
 
 

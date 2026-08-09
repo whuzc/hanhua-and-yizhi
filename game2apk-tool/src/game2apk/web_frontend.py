@@ -38,6 +38,7 @@ from .translation import (
     DEFAULT_TRANSLATION_REASONING_EFFORT,
     DEFAULT_TRANSLATION_THINKING_ENABLED,
     extract_safe_entries,
+    filter_non_chinese_entries,
     normalize_reasoning_effort,
     translation_language_profile,
 )
@@ -88,11 +89,25 @@ def _translation_profile_for_report(report: Any, progress: Callable[[str, float,
             "predominantlyChinese": False,
             "translationRecommended": False,
             "defaultTranslate": False,
+            "nonChineseEntries": 0,
+            "chineseOnlyEntries": 0,
+            "nonTextEntries": 0,
         }
     if progress is not None:
         progress("inspect", 0.88, "analyzing source language; no text is sent")
     try:
-        profile = translation_language_profile(extract_safe_entries(www_root))
+        entries = extract_safe_entries(www_root)
+        profile = translation_language_profile(entries)
+        candidate_entries = filter_non_chinese_entries(entries)
+        candidate_ids = {entry.entry_id for entry in candidate_entries}
+        profile["nonChineseEntries"] = len(candidate_entries)
+        profile["chineseOnlyEntries"] = sum(
+            1
+            for entry in entries
+            if entry.entry_id not in candidate_ids
+            and any("\u3400" <= char <= "\u9fff" for segment in entry.segments for char in segment)
+        )
+        profile["nonTextEntries"] = max(0, len(entries) - len(candidate_entries) - profile["chineseOnlyEntries"])
     except (OSError, ValueError, TypeError):
         return {"status": "unavailable", "defaultTranslate": False}
     profile["status"] = "detected"

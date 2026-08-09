@@ -24,6 +24,7 @@ from game2apk.translation import (
     TranslationService,
     apply_translations,
     extract_safe_entries,
+    filter_non_chinese_entries,
     translation_language_profile,
     validate_placeholders,
 )
@@ -228,6 +229,48 @@ class PipelineTests(unittest.TestCase):
         chinese_profile = translation_language_profile([chinese])
         self.assertTrue(chinese_profile["likelyChinese"])
         self.assertFalse(chinese_profile["translationRecommended"])
+
+    def test_translation_only_sends_non_chinese_blocks_and_protects_mixed_context(self) -> None:
+        from game2apk.models import TranslationEntry
+        from game2apk.translation import _protect_provider_segment, _restore_protected_segment
+
+        chinese = TranslationEntry("zh-only", "Map001.json", "message", "message", ["\u4e2d\u6587\u5bf9\u8bdd"], ["/x"], "zh", [[]])
+        english = TranslationEntry("en-only", "Map001.json", "message", "message", ["Hello world"], ["/x"], "en", [[]])
+        mixed = TranslationEntry("mixed", "Map001.json", "message", "message", ["\u4e2d\u6587 Hello"], ["/x"], "mixed", [[]])
+        selected = filter_non_chinese_entries([chinese, english, mixed])
+        self.assertEqual([entry.entry_id for entry in selected], ["en-only", "mixed"])
+
+        protected = _protect_provider_segment(mixed.segments[0])
+        self.assertIn("__G2A_KEEP_HAN_000__", protected)
+        restored, error = _restore_protected_segment(mixed.segments[0], "__G2A_KEEP_HAN_000__ hello")
+        self.assertIsNone(error)
+        self.assertEqual(restored, "\u4e2d\u6587 hello")
+
+        import shutil
+
+        filtered_www = self.root / "filtered-www"
+        (filtered_www / "data").mkdir(parents=True)
+        (filtered_www / "data" / "System.json").write_text(
+            json.dumps({"gameTitle": "\u4e2d\u6587\u6e38\u620f", "terms": {"basic": ["Fight"]}}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        transport = FakeTransport()
+        report = TranslationService().translate(
+            filtered_www,
+            model="deepseek-v4-flash",
+            api_key="fake",
+            transport=transport,
+            memory_path=self.root / "state" / "translation-memory.json",
+            confirmed_third_party=True,
+            force=True,
+        )
+        self.assertEqual(report.source_entries_total, 2)
+        self.assertEqual(report.entries_total, 1)
+        self.assertEqual(report.entries_skipped_chinese, 1)
+        self.assertEqual(report.entries_applied, 1)
+        payload_items = json.loads(transport.calls[0]["messages"][-1]["content"].split("INPUT=", 1)[1])
+        self.assertEqual(len(payload_items), 1)
+        self.assertNotIn("\u4e2d\u6587", json.dumps(payload_items, ensure_ascii=False))
 
     def test_fake_translation_applies_and_cache_recovers(self) -> None:
         first_www = self.root / "first-www"

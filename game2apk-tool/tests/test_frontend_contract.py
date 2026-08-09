@@ -146,6 +146,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('id="translation-effort"', html)
         self.assertIn('id="translation-detection"', html)
         self.assertIn('id="translate-toggle" type="checkbox" disabled', html)
+        self.assertIn("nonChineseEntries", js)
+        self.assertIn("G2A_KEEP_HAN", (ROOT / "src" / "game2apk" / "translation.py").read_text(encoding="utf-8"))
         self.assertIn('id="gradle-cache-hint"', html)
         self.assertIn('data-cache-scope="shared"', html)
         self.assertIn("gradle_user_home_scope", js)

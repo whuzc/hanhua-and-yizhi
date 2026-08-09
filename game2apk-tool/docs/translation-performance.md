@@ -19,6 +19,11 @@ are consumed and applied in source order, and successful results are reused
 from `.state/translation-memory.json` on later builds. Set these optional
 environment variables before starting the tool when needed:
 
+Source filtering happens before any request: pure Chinese blocks are skipped
+and preserved. A mixed block stays together for context, while Han runs are
+protected and restored unchanged; only its surrounding non-Chinese text may
+change. The inspection report exposes the candidate and skipped counts.
+
 RPG Maker MV `101` + consecutive `401/405` lines are extracted as one message
 block. The prompt asks DeepSeek to read all lines in that block together for
 context (pronouns, tone, and terminology), while returning the same line count

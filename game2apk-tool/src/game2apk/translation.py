@@ -22,7 +22,7 @@ from .models import TranslationEntry, TranslationFailure, TranslationReport
 from .security import atomic_write_json, redact_text
 
 
-PROMPT_VERSION = "mv-safe-v1"
+PROMPT_VERSION = "mv-safe-v2-non-chinese"
 # DeepSeek V4 Flash is the current fast model used by the optional translation
 # path; thinking is configurable and enabled by default. Keep the public
 # spelling (including hyphens) in
@@ -85,6 +85,7 @@ def normalize_reasoning_effort(value: str | None) -> str:
     return normalized
 _CONTROL_RE = re.compile(r"\\[A-Za-z]+(?:\[[^\]]*\])?|%\d+|\{\d+\}|\{\{[^{}]+\}\}|<[^>]+>|\\[nrt\\\"']")
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
+_HAN_RUN_RE = re.compile(r"[\u3400-\u9fff]+")
 _HIRAGANA_RE = re.compile(r"[\u3040-\u309f]")
 _KATAKANA_RE = re.compile(r"[\u30a0-\u30ff\u31f0-\u31ff]")
 _TEXT_KEYS = {
@@ -348,6 +349,67 @@ def extract_safe_entries(www: str | Path) -> list[TranslationEntry]:
     return sorted(result, key=lambda entry: (entry.relative_file.casefold(), entry.locations, entry.entry_id))
 
 
+def _script_flags(text: str, threshold: float = 0.30) -> dict[str, Any]:
+    """Return the explainable script signals used for source filtering."""
+
+    cjk = len(_CJK_RE.findall(text))
+    kana = len(_HIRAGANA_RE.findall(text)) + len(_KATAKANA_RE.findall(text))
+    latin_or_digits = len(re.findall(r"[A-Za-z0-9]", text))
+    denominator = cjk + kana + latin_or_digits
+    kana_ratio = kana / max(1, denominator)
+    han_ratio = cjk / max(1, denominator)
+    likely_japanese = kana >= 2 and kana_ratio >= 0.02
+    likely_chinese = cjk > 0 and not likely_japanese and han_ratio >= threshold
+    return {
+        "han": cjk,
+        "kana": kana,
+        "latinOrDigits": latin_or_digits,
+        "denominator": denominator,
+        "hanRatio": han_ratio,
+        "likelyJapanese": likely_japanese,
+        "likelyChinese": likely_chinese,
+    }
+
+
+def _has_translatable_script(text: str) -> bool:
+    """Ignore punctuation/number-only strings which are not translatable text."""
+
+    return bool(re.search(r"[A-Za-z\u3040-\u30ff\u3400-\u9fff]", text))
+
+
+def _segment_has_non_chinese_text(text: str, threshold: float = 0.30) -> bool:
+    """Whether a segment contains text that is eligible for translation.
+
+    A segment containing Han and Latin characters is retained as a mixed
+    context segment.  Its Han runs are protected before it reaches the
+    provider and restored byte-for-byte after the response.  This lets a
+    coherent dialogue block provide context without rewriting existing
+    Chinese text.
+    """
+
+    if not _has_translatable_script(text):
+        return False
+    return not bool(_script_flags(text, threshold=threshold)["likelyChinese"])
+
+
+def filter_non_chinese_entries(
+    entries: Iterable[TranslationEntry], threshold: float = 0.30
+) -> list[TranslationEntry]:
+    """Select blocks with at least one non-Chinese segment.
+
+    Whole dialogue/message blocks remain intact so the model sees all lines
+    together.  Purely Chinese blocks are never sent to DeepSeek.  Mixed blocks
+    are allowed as context, but their Han runs are protected by the request
+    and application paths below.
+    """
+
+    return [
+        entry
+        for entry in entries
+        if any(_segment_has_non_chinese_text(segment, threshold=threshold) for segment in entry.segments)
+    ]
+
+
 def translation_language_profile(entries: Iterable[TranslationEntry], threshold: float = 0.30) -> dict[str, Any]:
     """Return a small, explainable language signal for the inspection UI.
 
@@ -359,18 +421,18 @@ def translation_language_profile(entries: Iterable[TranslationEntry], threshold:
 
     values = list(entries)
     text = "\n".join(entry.source_text for entry in values)
-    cjk = len(_CJK_RE.findall(text))
-    kana = len(_HIRAGANA_RE.findall(text)) + len(_KATAKANA_RE.findall(text))
-    latin_or_digits = len(re.findall(r"[A-Za-z0-9]", text))
-    denominator = cjk + kana + latin_or_digits
+    flags = _script_flags(text, threshold=threshold)
+    cjk = flags["han"]
+    kana = flags["kana"]
+    latin_or_digits = flags["latinOrDigits"]
+    denominator = flags["denominator"]
     # Han characters occur in both Chinese and Japanese. A meaningful *share*
     # of hiragana/katakana is therefore a Japanese signal. A small amount of
     # kana in a predominantly Chinese project (for example plugin labels or
     # retained names) must not force an unnecessary third-party translation.
-    kana_ratio = kana / max(1, denominator)
-    han_ratio = cjk / max(1, denominator)
-    likely_japanese = kana >= 2 and kana_ratio >= 0.02
-    likely_chinese = cjk > 0 and not likely_japanese and han_ratio >= threshold
+    han_ratio = flags["hanRatio"]
+    likely_japanese = flags["likelyJapanese"]
+    likely_chinese = flags["likelyChinese"]
     return {
         "entries": len(values),
         "characters": len(text),
@@ -602,6 +664,66 @@ def _content_from_response(data: dict[str, Any]) -> tuple[str, str]:
     return content, reason
 
 
+def _protect_provider_segment(text: str) -> str:
+    """Protect controls and existing Han runs while retaining context.
+
+    The marker format is intentionally opaque and independent from MV control
+    markers.  It is only used in the provider payload; the original runs are
+    recovered from the corresponding source segment when the response is
+    applied.
+    """
+
+    protected, _tokens = protect_text(text)
+
+    counter = [0]
+
+    def replace_han(match: re.Match[str]) -> str:
+        # The index is assigned by the run order in this segment and keeps the
+        # serialized marker deterministic.
+        index = counter[0]
+        counter[0] += 1
+        return f"__G2A_KEEP_HAN_{index:03d}__"
+
+    return _HAN_RUN_RE.sub(replace_han, protected)
+
+
+def _restore_protected_segment(original: str, translated: str) -> tuple[str | None, str | None]:
+    """Restore Han runs and MV controls, rejecting a changed marker safely."""
+
+    original_han = _HAN_RUN_RE.findall(original)
+    restored = translated
+    for index, run in enumerate(original_han):
+        marker = f"__G2A_KEEP_HAN_{index:03d}__"
+        if marker not in restored:
+            return None, "protected Chinese text marker missing or changed"
+        restored = restored.replace(marker, run, 1)
+    protected_original, original_tokens = protect_text(original)
+    # A response that invents an extra protected Han marker is not safe to
+    # apply, even if all expected markers are present.
+    if "__G2A_KEEP_HAN_" in restored:
+        return None, "translation contains an unexpected protected Chinese marker"
+    for token_index, original_token in enumerate(original_tokens):
+        marker = f"__G2A_TOKEN_{token_index:03d}__"
+        if marker not in restored:
+            return None, "protected MV token marker missing or changed"
+        restored = restored.replace(marker, original_token, 1)
+    # ``protected_original`` is intentionally computed above to keep the
+    # control-token contract explicit; validate_placeholders performs the
+    # canonical comparison after restoration.
+    _ = protected_original
+    return restored, None
+
+
+def _han_runs_preserved(original: str, translated: str) -> bool:
+    """Guard against a provider rewriting Chinese in a mixed segment."""
+
+    original_runs = _HAN_RUN_RE.findall(original)
+    # A non-Chinese source segment is expected to gain Han text when the
+    # target language is Chinese.  Only compare runs when the source already
+    # contained Han text that must be preserved.
+    return not original_runs or original_runs == _HAN_RUN_RE.findall(translated)
+
+
 def _parse_translation_json(content: str, expected_ids: set[str]) -> dict[str, list[str]]:
     try:
         data = json.loads(content)
@@ -637,14 +759,16 @@ def _request_batch(
 ) -> dict[str, list[str]]:
     request_items = []
     for entry in entries:
-        protected_segments = [protect_text(segment)[0] for segment in entry.segments]
+        protected_segments = [_protect_provider_segment(segment) for segment in entry.segments]
         request_items.append({"id": entry.entry_id, "segments": protected_segments})
     prompt = (
         "Translate only the supplied RPG Maker MV display text into the requested target language. "
         "Return JSON exactly as {\"translations\":[{\"id\":string,\"segments\":string[]}]}. "
         "Treat every INPUT item as one coherent dialogue or text block: read all of its segments together "
         "to preserve context, pronouns, tone, and terminology; never translate word-by-word or as unrelated fragments. "
-        "Keep every protected marker unchanged, keep each segments array length and order unchanged, "
+        "Existing Chinese (Han) runs are marked __G2A_KEEP_HAN_NNN__ and MUST be copied byte-for-byte; "
+        "translate only the surrounding non-Chinese text. Keep every protected marker unchanged, "
+        "keep each segments array length and order unchanged, "
         "and preserve the line boundary of every segment. "
         "Do not translate markers, code, paths, or tags.\n"
         f"TARGET_LANGUAGE={target_language}\nINPUT=" + json.dumps(request_items, ensure_ascii=False)
@@ -766,8 +890,20 @@ class TranslationService:
             raise ConfigurationError("thinking_enabled must be true or false")
         reasoning_effort = normalize_reasoning_effort(reasoning_effort)
         model = normalize_model(model)
-        entries = extract_safe_entries(www)
-        recommended = recommend_skip_translation(entries)
+        source_entries = extract_safe_entries(www)
+        # Translation is opt-in, but even an explicit opt-in must never send
+        # already-Chinese-only blocks for rewriting.  Mixed blocks remain
+        # coherent context and have Han runs protected in _request_batch.
+        entries = filter_non_chinese_entries(source_entries)
+        candidate_ids = {entry.entry_id for entry in entries}
+        skipped_chinese = sum(
+            1
+            for entry in source_entries
+            if entry.entry_id not in candidate_ids
+            and any(_CJK_RE.search(segment) for segment in entry.segments)
+        )
+        skipped_non_text = max(0, len(source_entries) - len(entries) - skipped_chinese)
+        recommended = recommend_skip_translation(source_entries)
         report = TranslationReport(
             schema_version=1,
             source_language="zh-CN" if recommended else "unknown",
@@ -780,9 +916,23 @@ class TranslationService:
             reasoning_effort=reasoning_effort,
             skipped_recommended=recommended and not force,
             live_api_used=False,
+            source_entries_total=len(source_entries),
+            entries_skipped_chinese=skipped_chinese,
+            entries_skipped_non_text=skipped_non_text,
         )
+        if not entries:
+            self.progress(
+                "translate",
+                1.0,
+                f"no non-Chinese text selected; preserved {skipped_chinese} Chinese blocks and {skipped_non_text} non-text blocks",
+            )
+            return report
         if recommended and not force:
-            self.progress("translate", 1.0, "source is already predominantly Chinese; translation skipped")
+            self.progress(
+                "translate",
+                1.0,
+                f"source is predominantly Chinese; translation skipped ({skipped_chinese} Chinese blocks preserved)",
+            )
             return report
         if not confirmed_third_party:
             raise BlockedError("translation requires explicit confirmation before sending selected text to DeepSeek")
@@ -806,7 +956,9 @@ class TranslationService:
             key = translation_memory_key(entry.source_text, target_language, model)
             cached = memory.get(key)
             if cached is not None and len(cached) == len(entry.segments) and all(
-                validate_placeholders(original, translated)[0] for original, translated in zip(entry.segments, cached)
+                validate_placeholders(original, translated)[0]
+                and _han_runs_preserved(original, translated)
+                for original, translated in zip(entry.segments, cached)
             ):
                 translations[entry.entry_id] = cached
                 report.entries_cached += 1
@@ -895,22 +1047,24 @@ class TranslationService:
                                 continue
                             restored: list[str] = []
                             for original, translated in zip(entry.segments, candidate):
-                                _, original_tokens = protect_text(original)
-                                restored_segment = translated
-                                for token_index, original_token in enumerate(original_tokens):
-                                    restored_segment = restored_segment.replace(
-                                        f"__G2A_TOKEN_{token_index:03d}__", original_token
-                                    )
+                                restored_segment, protected_error = _restore_protected_segment(original, translated)
+                                if protected_error or restored_segment is None:
+                                    invalid_reason = protected_error or "protected text restoration failed"
+                                    break
+                                if not _han_runs_preserved(original, restored_segment):
+                                    invalid_reason = "Chinese text changed in provider response"
+                                    break
                                 restored.append(restored_segment)
-                            invalid_reason = next(
-                                (
-                                    reason
-                                    for original, translated in zip(entry.segments, restored)
-                                    if not (ok := validate_placeholders(original, translated))[0]
-                                    for reason in [ok[1]]
-                                ),
-                                None,
-                            )
+                            else:
+                                invalid_reason = next(
+                                    (
+                                        reason
+                                        for original, translated in zip(entry.segments, restored)
+                                        if not (ok := validate_placeholders(original, translated))[0]
+                                        for reason in [ok[1]]
+                                    ),
+                                    None,
+                                )
                             if invalid_reason:
                                 record_batch_failure([(key, group)], invalid_reason)
                                 continue

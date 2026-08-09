@@ -115,16 +115,20 @@
     translationDetection.className = `callout translation-detection ${detected && likelyChinese ? "ready" : "pending"}`;
     translationDetection.dataset.languageState = detected ? (likelyChinese ? "chinese" : "mixed") : "unknown";
     const ratio = Number(profile?.hanRatio);
-    const ratioText = Number.isFinite(ratio) ? `汉字比例约 ${(ratio * 100).toFixed(1)}%` : "未取得比例";
+    const ratioText = Number.isFinite(ratio) ? `\u6c49\u5b57\u6bd4\u4f8b\u7ea6 ${(ratio * 100).toFixed(1)}%` : "\u672a\u53d6\u5f97\u6bd4\u4f8b";
+    const candidateCount = Number(profile?.nonChineseEntries);
+    const candidateText = Number.isFinite(candidateCount)
+      ? `\u5c06\u4ec5\u7ffb\u8bd1 ${candidateCount} \u4e2a\u975e\u4e2d\u6587\u5757`
+      : "\u5c06\u4ec5\u7ffb\u8bd1\u975e\u4e2d\u6587\u6587\u672c";
     setText(
       translationDetection.querySelector("strong"),
-      detected ? (likelyChinese ? `检测到已有中文（${ratioText}）` : `未检测到明显中文（${ratioText}）`) : "项目语言暂时无法判断",
+      detected ? (likelyChinese ? `\u68c0\u6d4b\u5230\u5df2\u6709\u4e2d\u6587\uff08${ratioText}\uff09` : `\u672a\u68c0\u6d4b\u5230\u660e\u663e\u4e2d\u6587\uff08${ratioText}\uff09`) : "\u9879\u76ee\u8bed\u8a00\u6682\u65f6\u65e0\u6cd5\u5224\u65ad",
     );
     setText(
       translationDetection.querySelector("small"),
       detected && likelyChinese
-        ? "默认不翻译；如确实需要，请手动勾选 DeepSeek 翻译并确认第三方传输。"
-        : "翻译是可选功能，默认关闭；需要时手动勾选并确认第三方传输。",
+        ? `\u9ed8\u8ba4\u4e0d\u7ffb\u8bd1；${candidateText}；\u4e2d\u6587\u5757\u4f1a\u4fdd\u6301\u539f\u6587。`
+        : `\u7ffb\u8bd1\u662f\u53ef\u9009\u529f\u80fd，${candidateText}；\u4e2d\u6587\u5757\u4f1a\u4fdd\u6301\u539f\u6587。`,
     );
     resetTranslationChoice(true);
   };
