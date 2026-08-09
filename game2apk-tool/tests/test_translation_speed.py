@@ -97,7 +97,9 @@ class _StrictChineseLabelTransport:
                     segments.append(segment)
                     continue
                 controls = re.findall(r"__G2A_TOKEN_\d+__", segment)
-                segments.append("\u4e2d\u6587\u6807\u7b7e" + (" " + " ".join(controls) if controls else ""))
+                latin = re.findall(r"[A-Za-z]+", segment)
+                suffix = controls + latin
+                segments.append("\u4e2d\u6587\u6807\u7b7e" + (" " + " ".join(suffix) if suffix else ""))
             translations.append({"id": item["id"], "segments": segments})
         return {
             "choices": [
@@ -124,6 +126,29 @@ class _SizeLimitedStrictTransport(_StrictChineseLabelTransport):
         if len(items) > self.limit:
             raise TranslationError("DeepSeek response was not complete: length")
         return super().chat(payload, api_key)
+
+
+class _RepairOnRetryTransport:
+    """Echo the first thinking response, then repair singleton retries."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def chat(self, payload: dict, _api_key: str) -> dict:
+        self.calls.append(payload)
+        items = json.loads(payload["messages"][-1]["content"].split("INPUT=", 1)[1])
+        if len(self.calls) == 1:
+            translated = [{"id": item["id"], "segments": list(item["segments"])} for item in items]
+        else:
+            translated = [{"id": item["id"], "segments": ["中文标签"] * len(item["segments"])} for item in items]
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"content": json.dumps({"translations": translated}, ensure_ascii=False)},
+                }
+            ]
+        }
 
 
 class TranslationSpeedTests(unittest.TestCase):
@@ -235,7 +260,7 @@ class TranslationSpeedTests(unittest.TestCase):
             self.assertTrue(transport.calls)
             self.assertIn("Simplified Chinese (zh-CN)", transport.calls[0]["messages"][1]["content"])
             system = json.loads((www / "data" / "System.json").read_text(encoding="utf-8"))
-            self.assertEqual(system["variables"][1], "\u4e2d\u6587\u6807\u7b7e")
+            self.assertEqual(system["variables"][1], "\u4e2d\u6587\u6807\u7b7e EXP")
             self.assertEqual(system["variables"][2], "\u4e2d\u6587\u6807\u7b7e")
             self.assertEqual(system["switches"][1], "\u4e2d\u6587\u6807\u7b7e")
             dialogue = json.loads((www / "data" / "Map001.json").read_text(encoding="utf-8"))
@@ -279,6 +304,35 @@ class TranslationSpeedTests(unittest.TestCase):
             # reports a truncated response.
             self.assertLessEqual(transport.max_items, 24)
 
+    def test_invalid_thinking_labels_get_singleton_non_thinking_repair(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            www = self._www(root)
+            (www / "data" / "System.json").write_text(
+                json.dumps(
+                    {"gameTitle": "Demo", "locale": "ja_JP", "terms": {}, "variables": ["", "濡れ", "発情中", "犯され中"], "switches": [""]},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            transport = _RepairOnRetryTransport()
+            report = TranslationService().translate(
+                www,
+                api_key="not-a-real-key",
+                transport=transport,
+                memory_path=root / "memory.json",
+                confirmed_third_party=True,
+                force=True,
+                entry_kinds={"system-variable", "system-switch"},
+                batch_size=100,
+                max_concurrency=1,
+            )
+            self.assertEqual(report.entries_applied, 3)
+            self.assertFalse(report.failures)
+            self.assertEqual(len(transport.calls), 4)
+            for payload in transport.calls[1:]:
+                self.assertEqual(payload["thinking"], {"type": "disabled"})
+
     def test_pipeline_reports_first_cheat_label_failure_reason_without_key(self) -> None:
         from types import SimpleNamespace
         from game2apk.pipeline import PipelineService
@@ -310,7 +364,7 @@ class TranslationSpeedTests(unittest.TestCase):
             self.assertIn("synthetic provider failure", message)
             self.assertNotIn("secret-token", message)
 
-    def test_strict_cheat_labels_reject_japanese_or_english_echo(self) -> None:
+    def test_strict_cheat_labels_reject_japanese_echo_but_preserve_english(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             www = self._www(root)
@@ -338,8 +392,8 @@ class TranslationSpeedTests(unittest.TestCase):
                 max_concurrency=1,
             )
             self.assertEqual(report.entries_total, 2)
-            self.assertEqual(report.entries_applied, 0)
-            self.assertEqual(len(report.failures), 2)
+            self.assertEqual(report.entries_applied, 1)
+            self.assertEqual(len(report.failures), 1)
             system = json.loads((www / "data" / "System.json").read_text(encoding="utf-8"))
             self.assertEqual(system["variables"][1], "犯され中")
             self.assertEqual(system["variables"][2], "Gallery unlocked")
@@ -389,10 +443,12 @@ class TranslationSpeedTests(unittest.TestCase):
             )
             self.assertIn(strict_key, json.loads(memory_path.read_text(encoding="utf-8"))["entries"])
 
-    def test_strict_validator_allows_game_code_tokens_but_not_english(self) -> None:
+    def test_strict_validator_allows_game_code_tokens_and_english(self) -> None:
         self.assertTrue(validate_simplified_chinese_label("SE [自定义]", "SE [自定义] ")[0])
         self.assertTrue(validate_simplified_chinese_label("X/Y 12", "X/Y 12")[0])
-        self.assertFalse(validate_simplified_chinese_label("Gallery unlocked", "Gallery unlocked")[0])
+        self.assertTrue(validate_simplified_chinese_label("Gallery unlocked", "Gallery unlocked")[0])
+        self.assertTrue(validate_simplified_chinese_label("MAP:\u5f8c\u308d", "MAP:\u540e\u65b9")[0])
+        self.assertFalse(validate_simplified_chinese_label("MAP:\u5f8c\u308d", "\u5730\u56fe:\u540e\u65b9")[0])
         self.assertFalse(validate_simplified_chinese_label("犯され中", "犯され中")[0])
 
     def test_cheat_scope_matches_runtime_limits_and_japanese_signals(self) -> None:
@@ -414,7 +470,7 @@ class TranslationSpeedTests(unittest.TestCase):
         self.assertEqual(sum(item.kind == "system-variable" for item in selected), CHEAT_VISIBLE_VARIABLE_LIMIT)
         self.assertEqual(sum(item.kind == "system-switch" for item in selected), CHEAT_VISIBLE_SWITCH_LIMIT)
         self.assertTrue(cheat_label_needs_translation("拘束距離"))
-        self.assertTrue(cheat_label_needs_translation("Gallery unlocked"))
+        self.assertFalse(cheat_label_needs_translation("Gallery unlocked"))
         self.assertFalse(cheat_label_needs_translation("SE"))
 
     def test_model_aliases_normalize_to_official_identifier(self) -> None:
