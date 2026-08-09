@@ -139,7 +139,7 @@ BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Androi
       var hasKana = /[\u3040-\u30ff\u31f0-\u31ff]/.test(raw);
       var hasHan = /[\u3400-\u9fff]/.test(raw);
       if (hasHan && !hasKana) return raw;
-      return category + '（变量 ' + id + '；原文：' + raw + '）';
+      return category + '（变量 ' + id + '）';
     };
     cheat.discover = function () {
       var variables = global.$dataSystem && global.$dataSystem.variables || [];

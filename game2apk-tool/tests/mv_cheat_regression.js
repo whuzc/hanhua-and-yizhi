@@ -27,6 +27,9 @@ if (!bridge.includes('entry.naturalHp = actor._hp') || !bridge.includes('clamp(h
 if (!bridge.includes("title=\"原始标签：") || !bridge.includes('var label=cheat.displayLabel(f)')) {
   throw new Error('advanced cheat controls must display translated/category labels with source tooltip');
 }
+if (bridge.includes('；原文：') || bridge.includes('；原文:')) {
+  throw new Error('untranslated source labels must stay in the tooltip, not visible control text');
+}
 if (bridge.includes('Game2ApkCheat.*eval') || bridge.includes('eval(')) {
   throw new Error('cheat bridge must not use eval');
 }

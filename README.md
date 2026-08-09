@@ -2,8 +2,8 @@
 
 RPG Maker MV 项目迁移到 Android 的 Windows 本地工具。它把**用户自己拥有或获得授权的 MV 项目**暂存到干净模板中，生成可侧载安装的签名 APK，并输出可追溯的静态验收报告。
 
-> 当前工具版本：`v1.3.2`（签名产物命名与高级作弊标签修复；生成 APK 默认身份仍为 versionCode `8` / versionName `1.3.0`）
-> [下载 Windows portable v1.3.2](https://github.com/whuzc/hanhua-and-yizhi/releases/tag/v1.3.2)
+> 当前工具版本：`v1.3.3`（签名产物命名与高级作弊标签修复；生成 APK 默认身份仍为 versionCode `8` / versionName `1.3.0`）
+> [下载 Windows portable v1.3.3](https://github.com/whuzc/hanhua-and-yizhi/releases/tag/v1.3.3)
 
 ## 这是什么
 
