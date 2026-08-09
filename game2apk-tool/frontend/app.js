@@ -36,6 +36,7 @@
   let pollTimer = null;
   let heartbeatTimer = null;
   let inspected = false;
+  let cheatLabelsNeedTranslation = false;
   let lastJobMessage = "";
   let reportStickToBottom = true;
   let pollFailureCount = 0;
@@ -101,6 +102,7 @@
 
   const resetTranslationChoice = (available) => {
     translationToggle.disabled = !available;
+    if (!available) cheatLabelsNeedTranslation = false;
     if (!available) {
       translationToggle.checked = false;
       translationConfirm.checked = false;
@@ -115,6 +117,7 @@
 
   const renderTranslationDetection = (profile) => {
     if (!translationDetection) return;
+    cheatLabelsNeedTranslation = Boolean(profile?.cheatLabelsNeedTranslation);
     const detected = profile && profile.status === "detected";
     const likelyChinese = Boolean(profile?.likelyChinese || profile?.predominantlyChinese);
     translationDetection.className = `callout translation-detection ${detected && likelyChinese ? "ready" : "pending"}`;
@@ -458,7 +461,7 @@
     const source = $("#source-path").value.trim();
     const translate = $("#translate-toggle").checked;
     const confirm = $("#translation-confirm").checked;
-    if (!confirm) { log("需要翻译确认", translate ? "启用正文翻译前必须确认会向第三方发送待翻译文本。" : "高级作弊标签始终需要翻译；请确认允许在需要时向 DeepSeek 发送变量/开关名称。", "warn"); return; }
+    if ((translate || cheatLabelsNeedTranslation) && !confirm) { log("需要翻译确认", translate ? "启用正文翻译前必须确认会向第三方发送待翻译文本。" : "高级作弊标签始终需要翻译；请确认允许在需要时向 DeepSeek 发送变量/开关名称。", "warn"); return; }
     const versionCode = Number.parseInt($("#version-code").value, 10);
     if (!Number.isSafeInteger(versionCode) || versionCode < 1) { log("版本号无效", "Version code 必须是大于 0 的整数。", "warn"); return; }
     const payload = {

@@ -148,6 +148,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('id="translate-toggle" type="checkbox" disabled', html)
         self.assertIn("nonChineseEntries", js)
         self.assertIn("cheatLabelsNeedTranslation", js)
+        self.assertIn("translate || cheatLabelsNeedTranslation", js)
         self.assertIn("高级作弊标签会单独翻译", js)
         self.assertIn("始终单独翻译", html)
         self.assertIn("G2A_KEEP_HAN", (ROOT / "src" / "game2apk" / "translation.py").read_text(encoding="utf-8"))
