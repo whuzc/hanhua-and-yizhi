@@ -131,6 +131,12 @@ class StageManifest:
     # Translation may intentionally change a small, auditable set of data
     # files after staging. Keep this empty for ordinary builds.
     allowed_modified_files: list[str] = field(default_factory=list)
+    # A non-secret build fingerprint lets a failed pre-build run be resumed
+    # only when the source/configuration/translation choices still match.
+    resume_key: str | None = None
+    prepared_snapshot_sha256: str | None = None
+    # Runtime-only marker; it is deliberately not persisted in the manifest.
+    resumed_from_existing: bool = field(default=False, repr=False, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -154,6 +160,8 @@ class StageManifest:
             "runId": self.run_id,
             "sourceSnapshotAfterSha256": self.source_snapshot_after_sha256,
             "allowedModifiedFiles": list(self.allowed_modified_files),
+            "resumeKey": self.resume_key,
+            "preparedSnapshotSha256": self.prepared_snapshot_sha256,
         }
 
 

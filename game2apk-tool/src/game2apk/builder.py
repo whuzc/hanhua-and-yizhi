@@ -19,6 +19,8 @@ from .security import atomic_write_text, now_utc, redact_text, require_within, s
 
 
 NO_COMPRESS_EXTENSIONS = ("rpgmvp", "rpgmvo", "rpgmvm", "ogg", "m4a", "mp3", "wav", "webm")
+ALIYUN_GRADLE_DISTRIBUTION = "https://mirrors.aliyun.com/gradle/distributions/v8.11.1/gradle-8.11.1-bin.zip"
+OFFICIAL_GRADLE_DISTRIBUTION = "https://services.gradle.org/distributions/gradle-8.11.1-bin.zip"
 
 
 def _has_non_ascii(path: str | Path) -> bool:
@@ -437,6 +439,49 @@ class BuildService:
             return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", *command]
         return command
 
+    @staticmethod
+    def _wrapper_distribution_properties(wrapper: Path) -> Path | None:
+        candidate = wrapper.parent / "gradle" / "wrapper" / "gradle-wrapper.properties"
+        return candidate if candidate.is_file() else None
+
+    @staticmethod
+    def _mirror_download_failed(log_path: Path) -> bool:
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="replace").casefold()
+        except OSError:
+            return False
+        if "mirrors.aliyun.com/gradle/distributions" not in text:
+            return False
+        # Do not retry the official URL for ordinary Maven resolution errors;
+        # only wrapper/distribution transport failures qualify.
+        markers = (
+            "could not install gradle distribution",
+            "could not download",
+            "failed to download",
+            "connection reset",
+            "connection refused",
+            "unknownhost",
+            "timed out",
+            "unable to tunnel",
+        )
+        return any(marker in text for marker in markers)
+
+    @staticmethod
+    def _switch_to_official_distribution(properties: Path) -> bool:
+        try:
+            text = properties.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        escaped_mirror = ALIYUN_GRADLE_DISTRIBUTION.replace(":", r"\:")
+        escaped_official = OFFICIAL_GRADLE_DISTRIBUTION.replace(":", r"\:")
+        if escaped_mirror not in text and ALIYUN_GRADLE_DISTRIBUTION not in text:
+            return False
+        updated = text.replace(escaped_mirror, escaped_official).replace(ALIYUN_GRADLE_DISTRIBUTION, escaped_official)
+        if updated == text:
+            return False
+        atomic_write_text(properties, updated)
+        return True
+
     def _run_process(self, command: list[str], cwd: Path, env: dict[str, str], log_path: Path, secrets: list[str]) -> tuple[int, bool]:
         if self.runner is not None:
             result = self.runner(command, cwd, env, log_path, self.progress, self.cancel_event)
@@ -528,6 +573,25 @@ class BuildService:
             command = self._command(str(mapped_wrapper), config)
             try:
                 return_code, cancelled = self._run_process(command, mapped_android, env, mapped_log_path, [api_key] if api_key else [])
+                wrapper_properties = self._wrapper_distribution_properties(generated_wrapper)
+                if (
+                    return_code != 0
+                    and not cancelled
+                    and wrapper_properties is not None
+                    and self._mirror_download_failed(log_path)
+                    and self._switch_to_official_distribution(wrapper_properties)
+                ):
+                    first_log = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+                    self.progress("build", 0.55, "Aliyun Gradle distribution unavailable; retrying official distribution")
+                    return_code, cancelled = self._run_process(command, mapped_android, env, mapped_log_path, [api_key] if api_key else [])
+                    second_log = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+                    atomic_write_text(
+                        log_path,
+                        "[game2apk] Aliyun Gradle distribution failed; retried the official distribution URL.\n"
+                        + first_log
+                        + "\n[game2apk] official distribution retry output\n"
+                        + second_log,
+                    )
             finally:
                 # __exit__ is the actual cleanup, but this finally documents
                 # and tests the guarantee around failures/cancellation.

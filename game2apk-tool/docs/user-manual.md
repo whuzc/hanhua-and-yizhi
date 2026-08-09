@@ -4,7 +4,7 @@
 
 ## 工作流
 
-选择原 RPG Maker MV 根目录或 `www`，依次执行 inspect → stage → patch → build → sign → verify。原目录只读；`.work/<project-id>` 必须带 marker，存档、备份和临时文件在 stage 时排除。构建前后会复算 source snapshot，任何源树变化都会阻止候选输出。
+选择原 RPG Maker MV 根目录或 `www`，依次执行 inspect → stage → patch → build → sign → verify。原目录只读；`.work/<project-id>` 必须带 marker，存档、备份和临时文件在 stage 时排除。构建前后会复算 source snapshot，任何源树变化都会阻止候选输出。构建失败后使用完全相同的源目录、模板、配置和翻译选项重试，会复用已完成的暂存/补丁/翻译检查点；输入变化或检查点校验失败则新建 run。Gradle 任务本身不提供文件级断点，但共享用户缓存会复用已下载依赖。
 
 目标游戏的 YEP Core 有效画布为 1024×768；Android 运行时保持 `sensorLandscape`，WebView asset origin 固定为 `appassets.androidplatform.net`。没有 adb 设备时只能报告静态签名兼容结论，不能声称真机可玩。
 

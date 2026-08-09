@@ -97,6 +97,8 @@ portable 工具不是 Android 应用，不需要安装器或卸载。先关闭 `
 
 浏览器前端的标准流程为：选择游戏目录 → 点击“检查项目” → 填写应用信息与可选翻译/签名密码 → 必要时保存 SDK/JDK/Gradle 路径，或点击“下载 Android 命令行工具/下载 JDK 17”并选择安装目录、确认官方 HTTPS 下载 → 点击“构建并验证”。检查通过前构建按钮不会启用；任务开始后页面每 500 ms 读取状态，并显示阶段、百分比、实时日志、结果或脱敏错误。点击“取消任务”会请求后台安全停止当前阶段。
 
+构建失败后再次点击“构建并验证”会尝试断点续做：相同源目录、模板、应用配置和翻译选项会复用已经完成的暂存、补丁和翻译检查点，并跳过这些步骤；任何输入变化或检查点校验失败都会新建 run。Gradle 的单个任务本身不提供文件级断点，但共享 `GRADLE_USER_HOME` 会保留已下载的 wrapper、插件和依赖。
+
 每次启动都只监听 `127.0.0.1` 的随机端口，HTML 页面由同一个本机后台提供；写操作要求 HttpOnly 同源会话 Cookie 与 `X-Game2Apk-Request` 请求头。DeepSeek Key 与签名密码仅存在于当前构建请求内，后台不会写入日志、设置文件、APK 或 portable。页面每 5 秒发送心跳；关闭标签页后后台约 30 秒内回收，关闭启动器时也会由父进程监视器回收。浏览器前端响应系统的 `prefers-reduced-motion`；旧 Tk 兼容界面才使用 `GAME2APK_REDUCE_MOTION=1`。
 
 兼容入口：
@@ -137,7 +139,7 @@ powershell -ExecutionPolicy Bypass -File .\game2apk-tool\scripts\build-portable.
 1. 启动 `game2apk-ui.exe`，等待“Android 工具链”卡片完成本地扫描。已有 Android Studio/SDK/JDK 时可直接填写路径或点“浏览”，再点“保存并重检”。
 2. 如果缺少 SDK/JDK，点击对应的官方工具下载按钮，选择安装位置并阅读确认框。下载仅允许官方 HTTPS host，失败时可以改为手动选择已下载目录。
 3. Command-line Tools 只提供 `sdkmanager`，按模板的 `compileSdk`/`buildToolsVersion` 安装 platform 和 build-tools；需要手机调试时再安装 platform-tools。接受许可证和安装组件的动作由用户执行。
-4. Gradle wrapper 首次构建会把可再生缓存写入用户 Gradle 目录，不会写入 portable 或 Git 仓库。
+4. Gradle wrapper 首次构建会把可再生缓存写入用户 Gradle 目录，不会写入 portable 或 Git 仓库。模板优先使用阿里云 Gradle ZIP/Maven 镜像；Gradle ZIP 下载失败时自动回退官方 URL，Maven 依赖也保留官方仓库回退。
 
 这里的 Gradle 用户目录是跨项目共用的 `GRADLE_USER_HOME`，不是某个游戏专属缓存。构建完成后工具不会自动删除它：保留依赖和 wrapper 分发包可以让后续游戏更快、也能减少离线构建失败。只有磁盘紧张或缓存损坏时，关闭构建进程后再手动清理；下一次构建可能重新下载依赖。项目级 `.work` 暂存产物与它不同，属于可再生的构建审计数据；确认不再需要报告和日志后可单独清理，但不要把 `.state`、存档、原游戏目录当作缓存删除。
 

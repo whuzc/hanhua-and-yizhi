@@ -14,6 +14,7 @@ from .errors import Game2ApkError
 from .models import BuildConfig
 from .pipeline import PipelineService
 from .toolchain import COMPONENTS, download_component, discover_configured, load_config, missing_components, save_config
+from .translation import DEFAULT_TRANSLATION_REASONING_EFFORT, DEFAULT_TRANSLATION_THINKING_ENABLED
 from .visuals import BACKGROUND, GLASS, INK, MINT, MINT_DARK, MUTED, GlassButton, GlassCard, LiquidBackdrop, apply_windows_backdrop
 
 
@@ -327,12 +328,25 @@ class WizardApp:
                 control=default_control_config(),
             )
             config = BuildConfig(data["appName"], data["applicationId"], data["versionCode"], data["versionName"], control_config=data["control"])
-            stage = self.service.stage(self.inspection)
-            self.service.patch(stage, config)
-            if bool(settings["translate"]):
+            translate_requested = bool(settings["translate"])
+            resume_key = self.service.build_resume_key(
+                self.inspection,
+                str(settings["template"]),
+                config,
+                translate=translate_requested,
+                thinking_enabled=DEFAULT_TRANSLATION_THINKING_ENABLED,
+                reasoning_effort=DEFAULT_TRANSLATION_REASONING_EFFORT,
+            )
+            stage = self.service.stage(self.inspection, resume=True, resume_key=resume_key)
+            resumed = bool(stage.resumed_from_existing)
+            if not resumed:
+                self.service.patch(stage, config)
+            if translate_requested and not resumed:
                 if not bool(settings["confirm"]):
                     raise Game2ApkError("翻译前必须勾选第三方 DeepSeek 发送确认")
                 self.service.translate(stage, api_key=settings["api_key"], confirmed_third_party=True, force=True)
+            if not resumed:
+                self.service.mark_prepared(stage)
             configured_tools = discover_configured(str(settings["template"]))
             # adb is useful for optional device install/diagnostics but is not
             # required to assemble or sign a release APK.

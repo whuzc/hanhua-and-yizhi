@@ -300,11 +300,22 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "run":
             config = _config(args)
             inspection = service.inspect(args.source)
-            stage = service.stage(inspection)
-            service.patch(stage, config)
+            translate_requested = bool(args.translate or args.force_translation)
+            resume_key = service.build_resume_key(
+                inspection,
+                args.template,
+                config,
+                translate=translate_requested,
+                thinking_enabled=args.thinking_mode == "enabled",
+                reasoning_effort=args.reasoning_effort,
+            )
+            stage = service.stage(inspection, resume=True, resume_key=resume_key)
+            resumed = bool(stage.resumed_from_existing)
+            if not resumed:
+                service.patch(stage, config)
             translation = None
             api_key = None
-            if args.translate or args.force_translation:
+            if translate_requested and not resumed:
                 api_key = _read_cli_secret(args, "api_key", "DeepSeek API key", default_env="DEEPSEEK_API_KEY")
                 translation = service.translate(
                     stage,
@@ -315,6 +326,8 @@ def main(argv: list[str] | None = None) -> int:
                     thinking_enabled=args.thinking_mode == "enabled",
                     reasoning_effort=args.reasoning_effort,
                 )
+            if not resumed:
+                service.mark_prepared(stage)
             result = service.build(args.template, stage, config, api_key=api_key)
             if result.return_code != 0 or not result.apk_path:
                 _emit(result)

@@ -421,19 +421,39 @@ class JobManager:
 
                 if job.cancel_event.is_set():
                     raise CancelledError("build cancelled")
-                stage = service.stage(inspection)
+                build_resume_key = getattr(service, "build_resume_key", None)
+                if callable(build_resume_key):
+                    resume_key = build_resume_key(
+                        inspection,
+                        request.template,
+                        request.config,
+                        translate=request.translate,
+                        thinking_enabled=request.thinking_enabled,
+                        reasoning_effort=request.reasoning_effort,
+                    )
+                    stage = service.stage(inspection, resume=True, resume_key=resume_key)
+                else:
+                    # Keep the backend contract compatible with small
+                    # third-party PipelineService adapters used by integrations.
+                    stage = service.stage(inspection)
+                resumed = bool(getattr(stage, "resumed_from_existing", False))
                 if job.cancel_event.is_set():
                     raise CancelledError("build cancelled")
-                service.patch(stage, request.config)
-                if job.cancel_event.is_set():
-                    raise CancelledError("build cancelled")
+                if not resumed:
+                    service.patch(stage, request.config)
+                    if job.cancel_event.is_set():
+                        raise CancelledError("build cancelled")
                 language = _translation_profile_for_report(inspection, job.update_progress)
                 partial = {
                     "inspection": _json_safe(inspection),
                     "translationProfile": language,
-                    "stage": {"projectId": stage.project_id, "sourceUnchanged": stage.source_unchanged},
+                    "stage": {
+                        "projectId": stage.project_id,
+                        "sourceUnchanged": stage.source_unchanged,
+                        "resumed": resumed,
+                    },
                 }
-                if request.translate:
+                if request.translate and not resumed:
                     if not request.confirm:
                         raise ConfigurationError("translation requires explicit third-party confirmation")
                     translation = service.translate(
@@ -447,6 +467,13 @@ class JobManager:
                     if job.cancel_event.is_set():
                         raise CancelledError("build cancelled")
                     partial["translation"] = _json_safe(translation)
+                elif resumed:
+                    partial["translation"] = {"resumed": True, "message": "prepared translation checkpoint reused"}
+                    job.update_progress("stage", 1.0, "resuming prepared checkpoint; skipping stage, patch and translation")
+                if not resumed:
+                    mark_prepared = getattr(service, "mark_prepared", None)
+                    if callable(mark_prepared):
+                        mark_prepared(stage)
                 job.set_result(partial)
 
                 if job.cancel_event.is_set():

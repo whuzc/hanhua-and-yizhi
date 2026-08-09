@@ -10,7 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-from game2apk.builder import AsciiPathMapper, BuildService
+from game2apk.builder import ALIYUN_GRADLE_DISTRIBUTION, OFFICIAL_GRADLE_DISTRIBUTION, AsciiPathMapper, BuildService
 from game2apk.config import build_config, default_control_config, load_android_config
 from game2apk.errors import BlockedError, ConfigurationError
 from game2apk.inspector import inspect_game
@@ -139,6 +139,63 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("old.rpgsave", excluded)
         self.assertRegex(excluded["save/config.rpgsave"]["sha256"], r"^[0-9a-f]{64}$")
         self.assertGreaterEqual(stage.source_file_count, stage.copied_file_count + 3)
+
+    def test_stage_resume_reuses_only_matching_prebuild_checkpoint(self) -> None:
+        report = inspect_game(self.game)
+        work_base = self.root / ".work"
+        first = StageService().stage(report, work_base, minimum_free_bytes=0, resume_key="resume-key")
+        StageService.mark_prepared(first)
+
+        resumed = StageService().stage(
+            report,
+            work_base,
+            minimum_free_bytes=0,
+            resume=True,
+            resume_key="resume-key",
+        )
+        self.assertTrue(resumed.resumed_from_existing)
+        self.assertEqual(resumed.run_id, first.run_id)
+        self.assertEqual(resumed.staged_www, first.staged_www)
+
+        fresh = StageService().stage(
+            report,
+            work_base,
+            minimum_free_bytes=0,
+            resume=True,
+            resume_key="different-key",
+        )
+        self.assertFalse(fresh.resumed_from_existing)
+        self.assertNotEqual(fresh.run_id, first.run_id)
+
+    def test_template_uses_aliyun_gradle_distribution_and_maven_fallbacks(self) -> None:
+        template = Path(__file__).resolve().parents[1] / "templates" / "android-rpgmv"
+        wrapper = (template / "gradle" / "wrapper" / "gradle-wrapper.properties").read_text(encoding="utf-8")
+        settings = (template / "settings.gradle").read_text(encoding="utf-8")
+        self.assertIn(
+            "mirrors.aliyun.com/gradle/distributions/v8.11.1/gradle-8.11.1-bin.zip",
+            wrapper,
+        )
+        self.assertIn("maven.aliyun.com/repository/google", settings)
+        self.assertIn("maven.aliyun.com/repository/public", settings)
+        self.assertIn("maven.aliyun.com/repository/gradle-plugin", settings)
+
+    def test_gradle_wrapper_mirror_failure_can_fallback_to_official_url(self) -> None:
+        log = self.root / "gradle.log"
+        log.write_text(
+            f"Downloading {ALIYUN_GRADLE_DISTRIBUTION}\nCould not install Gradle distribution: connection reset\n",
+            encoding="utf-8",
+        )
+        self.assertTrue(BuildService._mirror_download_failed(log))
+        properties = self.root / "gradle-wrapper.properties"
+        escaped_mirror = ALIYUN_GRADLE_DISTRIBUTION.replace(":", r"\:")
+        properties.write_text(f"distributionUrl={escaped_mirror}\n", encoding="utf-8")
+        self.assertTrue(BuildService._switch_to_official_distribution(properties))
+        self.assertIn(OFFICIAL_GRADLE_DISTRIBUTION.replace(":", r"\:"), properties.read_text(encoding="utf-8"))
+        log.write_text(
+            f"Downloading {ALIYUN_GRADLE_DISTRIBUTION}\nCould not resolve all files for configuration ':classpath'\n",
+            encoding="utf-8",
+        )
+        self.assertFalse(BuildService._mirror_download_failed(log))
 
     def test_build_rejects_malicious_manifest_before_external_android_delete(self) -> None:
         report = inspect_game(self.game)

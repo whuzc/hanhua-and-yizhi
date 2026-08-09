@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import threading
@@ -43,6 +44,8 @@ def stage_manifest_from_dict(data: dict[str, Any]) -> StageManifest:
         run_id=data.get("runId"),
         source_snapshot_after_sha256=data.get("sourceSnapshotAfterSha256"),
         allowed_modified_files=list(data.get("allowedModifiedFiles", [])),
+        resume_key=data.get("resumeKey"),
+        prepared_snapshot_sha256=data.get("preparedSnapshotSha256"),
     )
 
 
@@ -60,8 +63,52 @@ class PipelineService:
         self.progress("inspect", 1.0, f"inspection status: {report.status}")
         return report
 
-    def stage(self, report: InspectionReport, minimum_free_bytes: int | None = None) -> StageManifest:
-        return StageService(self.progress, self.cancel_event).stage(report, self.work_root, minimum_free_bytes=minimum_free_bytes)
+    def stage(
+        self,
+        report: InspectionReport,
+        minimum_free_bytes: int | None = None,
+        *,
+        resume: bool = False,
+        resume_key: str | None = None,
+    ) -> StageManifest:
+        return StageService(self.progress, self.cancel_event).stage(
+            report,
+            self.work_root,
+            minimum_free_bytes=minimum_free_bytes,
+            resume=resume,
+            resume_key=resume_key,
+        )
+
+    def build_resume_key(
+        self,
+        report: InspectionReport,
+        template: str | Path,
+        config: BuildConfig,
+        *,
+        translate: bool,
+        thinking_enabled: bool,
+        reasoning_effort: str,
+    ) -> str:
+        """Fingerprint non-secret choices that affect the prepared stage.
+
+        API keys and signing passwords are intentionally excluded: they do not
+        change staged files, and a retry must be allowed to supply a new key.
+        """
+
+        payload = {
+            "schema": "prepared-stage-v1",
+            "sourceRoot": str(Path(report.source_root).resolve()),
+            "template": str(Path(template).resolve()),
+            "config": config.to_dict(),
+            "translate": bool(translate),
+            "thinkingEnabled": bool(thinking_enabled),
+            "reasoningEffort": str(reasoning_effort),
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def mark_prepared(self, stage: StageManifest) -> StageManifest:
+        return StageService.mark_prepared(stage, self.cancel_event)
 
     def patch(self, stage: StageManifest, config: BuildConfig) -> dict[str, str | int]:
         self.progress("patch", 0.1, "injecting staged input bridge")

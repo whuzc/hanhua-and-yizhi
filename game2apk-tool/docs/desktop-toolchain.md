@@ -8,6 +8,8 @@ Windows Release 不包含 Android SDK、JDK、Gradle 缓存、签名材料或原
 
 ## Gradle 缓存的范围与清理策略
 
+模板默认先访问阿里云 Gradle ZIP 与 Maven 镜像，官方仓库仍保留为回退；如果镜像网络不可达，Gradle 会继续尝试官方源。
+
 界面中的“Gradle 用户缓存”是 `GRADLE_USER_HOME`，默认位于当前用户的 `%APPDATA%\game2apk-tool\gradle-home`（也可以手动指定）。它是用户级、跨项目共用的 Gradle User Home，不属于某一个游戏；里面包含 wrapper 分发包、依赖、插件和日志等可再生内容。后续迁移其他游戏时复用它可以避免重复下载。
 
 因此构建完成后不会自动删除这个目录。Gradle 自身也会按版本和最近使用时间做后台清理；只有磁盘空间紧张、缓存损坏或需要强制重新下载时，才建议在关闭构建进程后手动清理，下一次构建可能需要重新联网下载。
