@@ -24,6 +24,8 @@ from .staging import StageService
 from .translation import (
     CHEAT_LABEL_MAX_BATCH_SIZE,
     CHEAT_LABEL_MAX_CONCURRENCY,
+    CHEAT_LABEL_THINKING_BATCH_SIZE,
+    CHEAT_LABEL_THINKING_MAX_CONCURRENCY,
     TranslationService,
     cheat_label_needs_translation,
     extract_safe_entries,
@@ -246,12 +248,7 @@ class PipelineService:
         # Keep the mandatory label pass below V4 Flash's response truncation
         # threshold. TranslationService also enforces these caps for direct
         # callers, but setting them here makes the pipeline contract explicit.
-        kwargs.setdefault("batch_size", CHEAT_LABEL_MAX_BATCH_SIZE)
-        kwargs.setdefault("max_concurrency", CHEAT_LABEL_MAX_CONCURRENCY)
-        # Keep preview/build requests bounded.  A single document is still
-        # used by direct callers when they do not opt into this cap, while the
-        # UI path gets progress after each 96-label document.
-        kwargs.setdefault("document_max_entries", 96)
+        self._set_cheat_translation_defaults(kwargs)
         report = TranslationService(self.progress, self.cancel_event).translate(
             stage.staged_www,
             memory_path=self.cheat_label_memory_path,
@@ -291,9 +288,7 @@ class PipelineService:
             return ready, None
 
         kwargs.pop("force", None)
-        kwargs.setdefault("batch_size", CHEAT_LABEL_MAX_BATCH_SIZE)
-        kwargs.setdefault("max_concurrency", CHEAT_LABEL_MAX_CONCURRENCY)
-        kwargs.setdefault("document_max_entries", 96)
+        self._set_cheat_translation_defaults(kwargs)
         self.state_root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="cheat-catalog-", dir=self.state_root) as temporary:
             preview_www = Path(temporary) / "www"
@@ -315,6 +310,27 @@ class PipelineService:
                 status="ready",
             )
         return ready, translation
+
+    @staticmethod
+    def _set_cheat_translation_defaults(kwargs: dict[str, Any]) -> None:
+        """Bound desktop cheat-label requests without changing user choices."""
+
+        thinking_enabled = kwargs.get("thinking_enabled", True) is not False
+        effort = str(kwargs.get("reasoning_effort", "high")).strip().casefold()
+        expensive_thinking = thinking_enabled and effort in {"high", "max"}
+        kwargs.setdefault("batch_size", CHEAT_LABEL_MAX_BATCH_SIZE)
+        kwargs.setdefault(
+            "max_concurrency",
+            CHEAT_LABEL_THINKING_MAX_CONCURRENCY if expensive_thinking else CHEAT_LABEL_MAX_CONCURRENCY,
+        )
+        # Low/disabled thinking keeps the compact 96-label document path.
+        # High/max thinking uses 24-label JSON batches and one in-flight
+        # request, retaining the selected reasoning effort while bounding
+        # response memory and making progress visible more often.
+        kwargs.setdefault(
+            "document_max_entries",
+            CHEAT_LABEL_THINKING_BATCH_SIZE if expensive_thinking else 96,
+        )
 
     def _record_translation_modifications(self, stage: StageManifest, report: TranslationReport) -> None:
         """Record only successful translation edits in the stage manifest.

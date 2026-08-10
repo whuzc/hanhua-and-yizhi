@@ -31,6 +31,10 @@ variables before starting the tool when needed:
 时加载正文缓存。桌面 UI 预览按最多 96 个标签一个 TXT/TSV 文档分批，避免单个大请求
 长时间占用内存；正文仍使用下面的上下文批次策略。
 
+当高级作弊翻译选择 `high` 或 `max` 思考强度时，桌面路径会自动使用单路、每批最多
+24 个标签的 JSON 请求；思考强度仍按用户选择发送。`low` 或关闭思考继续使用最多 96
+个标签的紧凑文档批次，以在速度和上下文之间取舍。
+
 Source filtering happens before any request: pure Chinese blocks are skipped
 and preserved. A mixed block stays together for context, while Han runs are
 protected and restored unchanged; only its surrounding non-Chinese text may

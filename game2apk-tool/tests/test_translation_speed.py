@@ -677,6 +677,34 @@ class TranslationSpeedTests(unittest.TestCase):
             self.assertEqual(report.api_requests, 2)
             self.assertEqual(len(transport.calls), 2)
 
+    def test_high_thinking_cheat_batches_are_single_flight_and_small(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            www = self._www(root)
+            labels = ["", *[f"日本語ラベル{i}" for i in range(1, 61)]]
+            (www / "data" / "System.json").write_text(
+                json.dumps({"gameTitle": "Demo", "locale": "ja_JP", "terms": {}, "variables": labels, "switches": [""]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            transport = _StrictChineseLabelTransport()
+            report = TranslationService().translate(
+                www,
+                api_key="not-a-real-key",
+                transport=transport,
+                memory_path=root / "memory.json",
+                confirmed_third_party=True,
+                force=True,
+                entry_kinds={"system-variable", "system-switch"},
+                thinking_enabled=True,
+                reasoning_effort="high",
+                max_concurrency=1,
+                document_max_entries=24,
+            )
+            self.assertEqual(report.entries_applied, 60)
+            self.assertEqual(report.api_requests, 3)
+            self.assertTrue(all(call.get("reasoning_effort") == "high" for call in transport.calls))
+            self.assertTrue(all(len(json.loads(call["messages"][-1]["content"].split("INPUT=", 1)[1])) <= 24 for call in transport.calls))
+
     def test_document_repair_groups_kana_failures_into_one_retry(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)

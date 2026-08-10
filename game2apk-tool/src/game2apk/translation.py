@@ -47,6 +47,12 @@ MAX_TRANSLATION_CONCURRENCY = 8
 # duplicate labels to be reused from the memory cache.
 CHEAT_LABEL_MAX_BATCH_SIZE = 24
 CHEAT_LABEL_MAX_CONCURRENCY = 2
+# High/max thinking spends considerably more completion budget than the
+# non-thinking path.  Keep the user's selected reasoning mode, but use small
+# single-flight JSON batches in the desktop preview so one slow completion
+# cannot hold two large responses in memory at once.
+CHEAT_LABEL_THINKING_BATCH_SIZE = 24
+CHEAT_LABEL_THINKING_MAX_CONCURRENCY = 1
 # A single line-oriented text document is more compact than repeating JSON
 # envelopes for every label.  Use it for the real runtime-sized cheat menu;
 # small synthetic/repair batches keep the existing JSON path.
@@ -1854,10 +1860,7 @@ class TranslationService:
             max_concurrency = min(max_concurrency, CHEAT_LABEL_MAX_CONCURRENCY)
             if document_max_entries is not None:
                 try:
-                    document_max_entries = max(
-                        CHEAT_LABEL_DOCUMENT_MIN_ENTRIES,
-                        int(document_max_entries),
-                    )
+                    document_max_entries = max(1, int(document_max_entries))
                 except (TypeError, ValueError):
                     raise ConfigurationError("document_max_entries must be an integer")
         # Translation is opt-in, but even an explicit opt-in must never send
