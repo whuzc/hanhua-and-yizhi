@@ -25,6 +25,9 @@ dist/*.apk
 /game2apk-tool-windows-portable.zip
 dist/*.aab
 
+# Generated game resource packs (may contain the complete original www tree)
+*.g2ares
+
 # 密钥与存档
 *.keystore
 *.jks

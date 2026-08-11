@@ -69,16 +69,85 @@ def _critical_assets(apk: Path) -> dict[str, Any]:
                 missing.append("assets/game2apk/config.json")
             save_entries = [name for name in names if name.startswith("assets/www/save/") or name.casefold().endswith(".rpgsave")]
             resource_entries = [name for name in names if name.startswith("assets/www/")]
+            resource_config = None
+            if "assets/game2apk/resource-pack.json" in names:
+                try:
+                    resource_config = json.loads(
+                        archive.read("assets/game2apk/resource-pack.json").decode("utf-8")
+                    )
+                except (ValueError, UnicodeDecodeError):
+                    missing.append("valid assets/game2apk/resource-pack.json")
             return {
                 "passed": not missing and not save_entries,
                 "assetCount": len(resource_entries),
                 "missing": missing,
                 "saveEntries": sorted(save_entries)[:20],
                 "config": config_present,
+                "externalResourcePack": resource_config,
                 "required": required,
             }
     except (OSError, zipfile.BadZipFile) as exc:
         return {"passed": False, "assetCount": 0, "missing": required, "error": redact_text(exc), "saveEntries": []}
+
+
+def _stage_resource_pack_check(
+    pack_path: str | Path | None,
+    resource_config: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Validate a ZIP64 resource pack instead of expecting all assets in APK."""
+
+    if not pack_path:
+        return {"checked": False, "passed": False, "reason": "resource pack path is missing"}
+    pack = Path(pack_path).resolve(strict=False)
+    result: dict[str, Any] = {
+        "checked": True,
+        "passed": False,
+        "path": str(pack),
+        "exists": pack.is_file(),
+        "zip64": False,
+        "manifest": False,
+    }
+    if not pack.is_file():
+        result["error"] = "resource pack file is missing"
+        return result
+    if isinstance(resource_config, dict):
+        expected_size = resource_config.get("packBytes")
+        if isinstance(expected_size, int) and pack.stat().st_size != expected_size:
+            result["error"] = "resource pack size does not match APK metadata"
+            return result
+        result["sha256"] = resource_config.get("packSha256")
+        result["fileCount"] = resource_config.get("fileCount")
+        result["sourceBytes"] = resource_config.get("sourceBytes")
+    try:
+        with zipfile.ZipFile(pack) as archive:
+            infos = archive.infolist()
+            result["zip64"] = any(
+                info.file_size > 0xFFFFFFFF or info.header_offset > 0xFFFFFFFF
+                for info in infos
+            )
+            raw_manifest = archive.read("game2apk-resource.json")
+            pack_manifest = json.loads(raw_manifest.decode("utf-8"))
+            result["manifest"] = True
+            if isinstance(resource_config, dict):
+                result["manifestMatches"] = (
+                    pack_manifest.get("projectId") == resource_config.get("projectId")
+                    and pack_manifest.get("fileCount") == resource_config.get("fileCount")
+                    and pack_manifest.get("sourceBytes") == resource_config.get("sourceBytes")
+                )
+            else:
+                result["manifestMatches"] = True
+            required = ["www/index.html", "www/js/rpg_core.js", "www/js/game2apk-input.js"]
+            names = set(archive.namelist())
+            result["required"] = required
+            result["missing"] = [name for name in required if name not in names]
+            result["passed"] = bool(
+                result["manifest"]
+                and result.get("manifestMatches", False)
+                and not result["missing"]
+            )
+    except (OSError, ValueError, KeyError, UnicodeDecodeError, zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
+        result["error"] = redact_text(exc)
+    return result
 
 
 def _normalize_zip_name(name: str) -> str:
@@ -229,6 +298,7 @@ class VerificationService:
         install: bool = False,
         report_path: str | Path | None = None,
         stage_manifest_path: str | Path | None = None,
+        resource_pack_path: str | Path | None = None,
     ) -> VerificationReport:
         apk = Path(apk_path).resolve(strict=True)
         build_start_epoch = None
@@ -241,7 +311,13 @@ class VerificationService:
         digest = _sha256_file(apk)
         self.progress("verify", 0.15, "checking APK ZIP assets")
         assets = _critical_assets(apk)
-        stage_assets = _stage_asset_check(apk, stage_manifest_path)
+        if resource_pack_path or assets.get("externalResourcePack"):
+            stage_assets = _stage_resource_pack_check(
+                resource_pack_path,
+                assets.get("externalResourcePack"),
+            )
+        else:
+            stage_assets = _stage_asset_check(apk, stage_manifest_path)
         toolchain = toolchain or ToolchainInfo(None, None, None, None, None, None, None, None)
         mapper = None
         if stage_manifest_path:
@@ -349,6 +425,8 @@ class VerificationService:
             device=device,
             passed=passed,
             signature_candidate=passed,
+            resource_pack_path=str(Path(resource_pack_path).resolve()) if resource_pack_path else None,
+            resource_pack=stage_assets if resource_pack_path else None,
         )
         if report_path:
             report.report_path = str(atomic_write_json(report_path, {**report.to_dict(), "generatedAtUtc": now_utc()}))
@@ -365,4 +443,7 @@ class VerificationService:
         destination_dir.mkdir(parents=True, exist_ok=True)
         destination = destination_dir / (filename or Path(report.apk_path).name)
         shutil.copy2(report.apk_path, destination)
+        if report.resource_pack_path:
+            pack_source = Path(report.resource_pack_path).resolve(strict=True)
+            shutil.copy2(pack_source, destination_dir / pack_source.name)
         return destination

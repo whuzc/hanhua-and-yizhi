@@ -592,6 +592,8 @@
         const verification = result.verification || {};
         const verificationPassed = result.verificationPassed === true
           || (verification.passed === true && verification.signatureCandidate === true && Boolean(result.distApkPath));
+        const buildResource = result.build?.resourcePack;
+        const resourcePackPath = result.distResourcePackPath || result.resourcePackPath || result.build?.resourcePackPath;
         completionLabel = verificationPassed
           ? "构建并验收通过"
           : "构建完成，但静态验收未通过";
@@ -600,6 +602,16 @@
           jsonPreview(result),
           verificationPassed ? "success" : "error",
         );
+        if (verificationPassed && buildResource?.mode === "external" && resourcePackPath) {
+          const applicationId = verification.metadata?.applicationId || "<applicationId>";
+          const devicePath = `/Android/data/${applicationId}/files/${buildResource.deviceRelativePath || `game2apk/${buildResource.fileName}`}`;
+          log(
+            "外部资源包已生成",
+            `APK 只包含运行时。请同时复制资源包：${resourcePackPath}\n手机目标路径：${devicePath}\n资源包 SHA-256：${buildResource.packSha256 || "见验收报告"}`,
+            "success",
+          );
+          completionLabel = "构建完成（APK + 外部资源包）";
+        }
       }
       setProgress(1, completionLabel);
       setText(reportState, completionLabel);

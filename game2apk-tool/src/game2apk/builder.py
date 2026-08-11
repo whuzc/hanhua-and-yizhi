@@ -15,6 +15,13 @@ from xml.sax.saxutils import escape as xml_escape
 from .config import default_control_config, write_android_config
 from .errors import BlockedError, CancelledError, ExternalToolError
 from .models import BuildConfig, BuildResult, StageManifest, ToolchainInfo
+from .resource_pack import (
+    ResourcePackArtifact,
+    ResourcePackPlan,
+    create_resource_pack,
+    plan_resource_pack,
+    write_pack_config,
+)
 from .security import atomic_write_text, now_utc, redact_text, require_within, sanitized_child_environment
 
 
@@ -317,6 +324,8 @@ class BuildService:
         self.runner = runner
         self.mapping_runner = mapping_runner
         self.mapper_factory = mapper_factory or (lambda project_dir, project_id: AsciiPathMapper(project_dir, project_id, runner=self.mapping_runner))
+        self.resource_pack_plan: ResourcePackPlan | None = None
+        self.resource_pack_artifact: ResourcePackArtifact | None = None
 
     @staticmethod
     def _validate_stage_for_build(stage: StageManifest) -> tuple[Path, Path, Path]:
@@ -407,9 +416,59 @@ class BuildService:
         if assets_www.exists():
             shutil.rmtree(assets_www)
         assets_www.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(staged_www, assets_www)
-        if (assets_www / "save").exists() or list(assets_www.rglob("*.rpgsave")):
-            raise BlockedError("staged save files would enter APK assets")
+        self.resource_pack_plan = plan_resource_pack(staged_www)
+        self.resource_pack_artifact = None
+        if self.resource_pack_plan.enabled:
+            # Keep only the tiny runtime fixture in the APK.  The actual MV
+            # www tree is written to a ZIP64 archive and served by the
+            # Android WebView from the app-specific external files directory.
+            template_www = Path(template_dir).resolve(strict=True) / "app" / "src" / "main" / "assets" / "www"
+            if template_www.is_dir():
+                shutil.copytree(template_www, assets_www)
+            else:
+                assets_www.mkdir(parents=True, exist_ok=True)
+            pack_stem = re.sub(
+                r"[^0-9A-Za-z\u3400-\u9fff_-]+",
+                "-",
+                config.app_name,
+            ).strip("-") or config.application_id
+            pack_version = re.sub(r"[^0-9A-Za-z._-]+", "-", config.version_name).strip("-") or "version"
+            pack_path = run_dir / "resource-pack" / f"{pack_stem}-{pack_version}-resources.g2ares"
+            self.progress(
+                "build",
+                0.12,
+                "project exceeds the single-APK ZIP32 limit; creating external ZIP64 resource pack",
+            )
+
+            def pack_progress(done: int, total: int, message: str) -> None:
+                if self.cancel_event is not None and self.cancel_event.is_set():
+                    raise CancelledError("resource pack creation cancelled")
+                fraction = 0.12 + (0.06 * (float(done) / float(total) if total else 0.0))
+                self.progress("build", fraction, message)
+
+            self.resource_pack_artifact = create_resource_pack(
+                staged_www,
+                pack_path,
+                project_id=stage.project_id,
+                source_snapshot_sha256=stage.source_snapshot_sha256,
+                progress=pack_progress,
+            )
+            write_pack_config(
+                android_dir / "app" / "src" / "main" / "assets" / "game2apk" / "resource-pack.json",
+                self.resource_pack_artifact,
+            )
+            self.progress(
+                "build",
+                0.19,
+                f"external resource pack ready: {self.resource_pack_artifact.pack_bytes} bytes",
+            )
+        else:
+            shutil.copytree(staged_www, assets_www)
+            if (assets_www / "save").exists() or list(assets_www.rglob("*.rpgsave")):
+                raise BlockedError("staged save files would enter APK assets")
+            stale_pack_config = android_dir / "app" / "src" / "main" / "assets" / "game2apk" / "resource-pack.json"
+            if stale_pack_config.exists():
+                stale_pack_config.unlink()
         _render_template(android_dir, config)
         self.progress("build", 0.2, "versioned Android template rendered")
         return android_dir
@@ -418,7 +477,7 @@ class BuildService:
     def _ignore_template_artifacts(directory: str, names: list[str]) -> set[str]:
         # A template checkout may contain local Gradle caches or old outputs;
         # neither is a source asset or a valid result for this build.
-        ignored = {".gradle", ".gradle-home", "build", ".work", ".state", "dist"}
+        ignored = {".gradle", ".gradle-home", ".gradle-user-home", "build", ".work", ".state", "dist"}
         return {
             name
             for name in names
@@ -520,6 +579,8 @@ class BuildService:
         toolchain: ToolchainInfo | None = None,
         api_key: str | None = None,
     ) -> BuildResult:
+        self.resource_pack_plan = None
+        self.resource_pack_artifact = None
         android_dir = self.prepare_template(template_dir, stage, config)
         run_dir = android_dir.parent
         if toolchain is None:
@@ -600,6 +661,15 @@ class BuildService:
         candidates = [path for path in (android_dir / "app" / "build" / "outputs" / "apk" / "release").glob("*.apk") if path.is_file() and path.stat().st_mtime >= start_epoch]
         apk = max(candidates, key=lambda path: path.stat().st_mtime) if candidates and return_code == 0 else None
         self.progress("build", 1.0, f"Gradle exited with code {return_code}")
+        resource_metadata = self.resource_pack_plan.to_dict() if self.resource_pack_plan else None
+        if self.resource_pack_artifact is not None:
+            resource_metadata = {
+                **(resource_metadata or {}),
+                "mode": "external",
+                **self.resource_pack_artifact.config_dict(),
+            }
+        elif resource_metadata is not None:
+            resource_metadata = {**resource_metadata, "mode": "apk"}
         return BuildResult(
             started_at_utc=started_at,
             finished_at_utc=finished_at,
@@ -610,4 +680,6 @@ class BuildService:
             log_path=str(log_path),
             toolchain=toolchain,
             cancelled=cancelled,
+            resource_pack_path=(str(self.resource_pack_artifact.path) if self.resource_pack_artifact else None),
+            resource_pack=resource_metadata,
         )

@@ -349,6 +349,11 @@ def main(argv: list[str] | None = None) -> int:
             signing = service.sign(result, config, password=password)
             verification = service.verify(result, config, install=args.adb_install)
             promoted = service.promote(verification, config) if verification.signature_candidate and verification.passed else None
+            resource_pack_path = getattr(result, "resource_pack_path", None)
+            dist_resource_pack = (
+                str(Path(promoted).parent / Path(resource_pack_path).name)
+                if promoted and resource_pack_path else None
+            )
             _emit(
                 {
                     "inspection": inspection.to_dict(),
@@ -359,6 +364,8 @@ def main(argv: list[str] | None = None) -> int:
                     "signing": signing,
                     "verification": verification.to_dict(),
                     "distApkPath": str(promoted) if promoted else None,
+                    "resourcePackPath": resource_pack_path,
+                    "distResourcePackPath": dist_resource_pack,
                 }
             )
             return 0 if verification.passed else 2

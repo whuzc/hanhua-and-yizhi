@@ -20,7 +20,7 @@
 4. `app/build.gradle` 通过 `game2apkApplicationId`、`game2apkVersionCode` 和 `game2apkVersionName` Gradle properties 接收应用标识，release 已明确 `debuggable false`，并有 Android 资源 `noCompress` 扩展名配置。
 5. 输入桥由模板的 Java 代码通过 WebView `evaluateJavascript` 调用；Windows 侧只负责把 `game2apk-input.js` 放到 `assets/www`。
 
-构建器在副本中复制 `www` 和 `assets/game2apk/config.json`，会忽略模板的 `.gradle`、`.gradle-home`、`build`、`dist`、keystore 和 APK 文件，防止旧产物混入。
+构建器在副本中复制 `www` 和 `assets/game2apk/config.json`，会忽略模板的 `.gradle`、`.gradle-home`、`build`、`dist`、keystore 和 APK 文件，防止旧产物混入。暂存 `www` 的保守估算接近 ZIP32 4 GiB 边界时，`resource_pack.py` 改为生成 ZIP64 `*-resources.g2ares`，APK 只保留模板运行时，并把 `assets/game2apk/resource-pack.json` 写入 APK。Android `ResourcePackPathHandler` 通过 `WebViewAssetLoader` 从应用专属外部目录按需读取 `www/*`，不把多 GB 资源一次性加载到内存；`verifier.py` 同时校验 APK 内元数据和外部包清单。
 
 ## 高级作弊变量选择契约
 

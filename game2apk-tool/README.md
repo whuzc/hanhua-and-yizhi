@@ -1,8 +1,8 @@
 # game2apk-tool
 
-当前发布版本：`v1.3.13`。本版修复高级作弊 high/max 思考模式卡住和内存占满的问题；高思考请求改为单路、每批最多 24 个标签，仍保留用户选择的思考强度。
+当前发布版本：`v1.4.0`。本版新增超大 MV 项目的 APK + ZIP64 外部资源包模式；保留高级作弊 high/max 思考模式的单路、小批次内存保护。
 
-当前发布版本为工具 `v1.3.13`；生成 APK 默认 versionCode `8`、versionName `1.3.0`（由 7/1.2.0 升级），包含动态作弊菜单、可逆无敌、战斗胜负控制、事件回想传送、加密音频修复，以及签名产物命名、日文作弊标签简体中文文档翻译、正文上下文 TXT 翻译、高级作弊变量选择、高级标签缓存隔离和高思考小批次保护。
+当前发布版本为工具 `v1.4.0`；生成 APK 默认 versionCode `8`、versionName `1.3.0`（由 7/1.2.0 升级），包含动态作弊菜单、可逆无敌、战斗胜负控制、事件回想传送、加密音频修复，以及签名产物命名、日文作弊标签简体中文文档翻译、正文上下文 TXT 翻译、高级作弊变量选择、高级标签缓存隔离、高思考小批次保护和超大项目外部资源包。
 
 Windows 本地工具：检查 RPG Maker MV、在受标记的 `.work` 副本中暂存和补丁、可选离线翻译、Gradle 构建、稳定签名并做 APK 静态验收。原游戏目录只读；本项目不生成 AAB。
 
@@ -67,6 +67,7 @@ portable 不得包含原游戏、存档、APK、AAB、keystore、DPAPI 文件或
 ## 主要功能
 
 - **MV → Android**：检查 RPG Maker MV 目录、识别引擎与分辨率、排除存档、在受标记的 `.work` 副本中补丁，使用版本化 Android 模板构建并静态验收。
+- **超大项目自动拆包**：构建前按暂存 `www` 的压缩后估算体积判断是否接近 Android APK 的 ZIP32 4 GiB 边界。普通项目生成单个 APK；预计会超过安全线时，APK 只携带运行时，完整 `www` 自动写入可验证的 ZIP64 `*-resources.g2ares` 外部资源包，构建结果和静态报告会同时列出两个产物。
 - **工具链自动发现**：启动时优先读取已存在的 `ANDROID_SDK_ROOT`、`ANDROID_HOME`、`JAVA_HOME`、`PATH`、Android Studio 默认目录和用户配置；如果本机已有 Android 工具，会直接调用，不重复安装。缺少组件时仅在用户点击下载并确认后访问官方 HTTPS 地址，安装目录由用户选择。Command-line Tools 下载后仍需用户用 `sdkmanager` 或 Android Studio 安装项目所需的 platform/build-tools/platform-tools；工具不会静默接受许可证。
 - **可选 DeepSeek 翻译**：默认不联网、不翻译。勾选强制翻译并明确确认第三方传输后，使用环境变量名、stdin 或隐藏 prompt 提供 Key；Key 不出现在 argv、日志、报告、APK 或 portable。建议先备份并逐段审阅机器翻译结果。
 
@@ -170,6 +171,24 @@ adb install -r "D:\\output\\game2apk.apk"
 ```
 
 `adb install -r` 只覆盖安装，不清除数据；若系统提示签名不一致，停止操作并检查是否误用了另一份 keystore。不要为了“修复安装”而卸载应用，否则存档可能丢失。
+
+### 超大项目：APK + 外部资源包
+
+当报告显示“APK + 外部资源包”时，必须同时保留构建输出目录中的两个文件：签名 APK 和同名的 `*-resources.g2ares`。先安装 APK，再把资源包原样复制到下面的应用专属目录（`<包名>` 以报告中的 `applicationId` 为准）：
+
+```text
+/Android/data/<包名>/files/game2apk/<应用名>-<版本>-resources.g2ares
+```
+
+Windows 下可用 USB/MTP 将资源包复制到手机的 `Android/data/<包名>/files/game2apk/`；部分 Android 版本限制普通文件管理器访问 `Android/data`，此时使用系统文件选择器、电脑 MTP 或 `adb push`。例如：
+
+```powershell
+adb shell mkdir -p /sdcard/Android/data/com.game2apk.xianyaoshengcanver22/files/game2apk
+adb push ".\dist\我的游戏-1.0.0-resources.g2ares" `
+  "/sdcard/Android/data/com.game2apk.xianyaoshengcanver22/files/game2apk/"
+```
+
+资源包必须与 APK 来自同一次构建；应用启动时会检查文件名、大小、项目标识、文件数量和 ZIP 清单。缺包、放错目录或与 APK 不匹配时不会进入半加载状态，而是显示准确的目标路径和重新复制提示。资源包只读使用，不会覆盖 WebView `localStorage` 或手机存档。不要把资源包改名、解压或放入 `assets`；小于 ZIP32 安全线的项目仍会把资源直接放进单个 APK。
 
 ## 故障排查
 

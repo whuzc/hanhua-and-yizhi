@@ -8,6 +8,16 @@
 
 目标游戏的 YEP Core 有效画布为 1024×768；Android 运行时保持 `sensorLandscape`，WebView asset origin 固定为 `appassets.androidplatform.net`。没有 adb 设备时只能报告静态签名兼容结论，不能声称真机可玩。
 
+## 超大项目：APK + 外部资源包
+
+如果报告标记为“APK + 外部资源包”，这是因为完整 `www` 接近 APK ZIP32 的 4 GiB 上限。工具会同时生成签名 APK 和 `*-resources.g2ares` ZIP64 包。安装 APK 后，将资源包原样复制到：
+
+```text
+/Android/data/<applicationId>/files/game2apk/<应用名>-<版本>-resources.g2ares
+```
+
+`<applicationId>` 和文件名以构建报告为准；不要解压、改名或把资源包放进 APK。应用启动时会校验项目标识、文件数、大小和清单，缺包时会显示应复制的目录。Windows 可通过 MTP 或 `adb push` 复制；某些 Android 版本限制普通文件管理器访问 `Android/data`。
+
 ## 输入
 
 游戏区单指触摸不再统一映射为 Enter。透明覆盖层的空白区让 WebView 成为原生 touch target，MV 自己处理选择窗口 hitTest、地图 `setDestination`、默认 dash/触摸事件和消息长按加速。

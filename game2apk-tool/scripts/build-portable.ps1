@@ -46,7 +46,7 @@ if (-not (Test-Path -LiteralPath $frontendSource -PathType Container)) { throw "
 if (Test-Path -LiteralPath $frontendTarget) { Remove-Item -LiteralPath $frontendTarget -Recurse -Force }
 Copy-Item -LiteralPath $frontendSource -Destination $frontendTarget -Recurse -Force
 
-$artifactDirectoryNames = @('build', '.gradle', '.gradle-home', '.work', '.state', 'dist')
+$artifactDirectoryNames = @('build', '.gradle', '.gradle-home', '.gradle-user-home', '.work', '.state', 'dist')
 Get-ChildItem -LiteralPath $templateTarget -Recurse -Directory -Force |
     Sort-Object FullName -Descending |
     Where-Object { $artifactDirectoryNames -contains $_.Name } |
@@ -56,7 +56,7 @@ Get-ChildItem -LiteralPath $templateTarget -Recurse -File -Force |
     ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
 
 $forbidden = Get-ChildItem -LiteralPath $portableAppRoot -Recurse -File -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -match '(?i)(\.rpgsave$|\.jks$|\.keystore$|password|api[_-]?key)' }
+    Where-Object { $_.Name -match '(?i)(\.rpgsave$|\.jks$|\.keystore$|\.apk$|\.aab$|\.g2ares$|password|api[_-]?key)' }
 if ($forbidden) {
     throw "portable output contains a forbidden credential/save-like file"
 }

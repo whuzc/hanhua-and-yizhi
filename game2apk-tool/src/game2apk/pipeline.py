@@ -448,6 +448,7 @@ class PipelineService:
             install=install,
             report_path=report_path,
             stage_manifest_path=Path(result.work_dir).parent / "stage-manifest.json",
+            resource_pack_path=result.resource_pack_path,
         )
 
     def promote(self, report: VerificationReport, config: BuildConfig) -> Path:

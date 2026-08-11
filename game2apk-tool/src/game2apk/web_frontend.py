@@ -665,6 +665,13 @@ class JobManager:
                 promoted = service.promote(verification, request.config) if verification.signature_candidate and verification.passed else None
                 verification_passed = bool(verification.passed and verification.signature_candidate and promoted)
                 signed_apk_path = signing.get("finalSignedApk") or getattr(result, "apk_path", None)
+                # Keep compatibility with lightweight pipeline adapters used
+                # by the desktop backend tests and by third-party integrations:
+                # external resource packs are optional on BuildResult.
+                result_resource_pack = getattr(result, "resource_pack_path", None)
+                promoted_resource_pack = None
+                if promoted and result_resource_pack:
+                    promoted_resource_pack = str(Path(promoted).parent / Path(result_resource_pack).name)
                 partial.update(
                     {
                         # Refresh the build record after signing: the Gradle
@@ -675,6 +682,8 @@ class JobManager:
                         "verification": _json_safe(verification),
                         "signedApkPath": str(signed_apk_path) if signed_apk_path else None,
                         "distApkPath": str(promoted) if promoted else None,
+                        "resourcePackPath": result_resource_pack,
+                        "distResourcePackPath": promoted_resource_pack,
                         "verificationPassed": verification_passed,
                     }
                 )

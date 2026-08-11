@@ -339,6 +339,10 @@ class BuildResult:
     log_path: str | None
     toolchain: ToolchainInfo
     cancelled: bool = False
+    # When the staged www tree is too large for a ZIP32 APK, the Android
+    # runtime is shipped separately as a ZIP64 resource pack.
+    resource_pack_path: str | None = None
+    resource_pack: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -351,6 +355,8 @@ class BuildResult:
             "logPath": self.log_path,
             "toolchain": self.toolchain.to_dict(),
             "cancelled": self.cancelled,
+            "resourcePackPath": self.resource_pack_path,
+            "resourcePack": self.resource_pack,
         }
 
 
@@ -371,6 +377,8 @@ class VerificationReport:
     passed: bool
     signature_candidate: bool
     report_path: str | None = None
+    resource_pack_path: str | None = None
+    resource_pack: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -389,4 +397,6 @@ class VerificationReport:
             "passed": self.passed,
             "signatureCandidate": self.signature_candidate,
             "reportPath": self.report_path,
+            "resourcePackPath": self.resource_pack_path,
+            "resourcePack": self.resource_pack,
         }
