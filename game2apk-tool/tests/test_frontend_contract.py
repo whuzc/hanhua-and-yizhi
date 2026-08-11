@@ -215,6 +215,22 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('@media (hover: hover) and (pointer: fine)', css)
         self.assertIn('@media (prefers-reduced-motion: reduce)', css)
 
+    def test_layout_editor_has_a_full_width_hit_safe_drag_surface(self) -> None:
+        html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+        css = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+        js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('data-section="layout"', html)
+        self.assertIn('.cheat-variable-panel, .layout-panel, .report-panel { grid-column: 1 / -1; }', css)
+        self.assertIn('.layout-panel { grid-column: 1 / -1;', css)
+        self.assertIn('min-height: 360px', css)
+        self.assertIn('z-index: 3', css)
+        self.assertIn('background: rgba(247,255,252,.94)', css)
+        self.assertIn('min-width: 0', css)
+        self.assertIn('pointerId: event.pointerId', js)
+        self.assertIn('setPointerCapture(event.pointerId)', js)
+        self.assertIn('event.stopPropagation()', js)
+        self.assertIn('node.classList.add("is-dragging")', js)
+
     def test_health_declares_gradle_user_home_as_shared(self) -> None:
         import sys
 

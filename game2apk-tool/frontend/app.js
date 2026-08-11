@@ -434,22 +434,26 @@
       node.style.width = `${button.width * 100}%`;
       node.style.height = `${button.height * 100}%`;
       node.addEventListener("pointerdown", (event) => {
-        if (currentJobId) return;
+        if (currentJobId || (event.button !== undefined && event.button !== 0)) return;
         event.preventDefault();
+        event.stopPropagation();
         selectedLayoutId = button.id;
         syncLayoutInspector();
         layoutDrag = {
           id: button.id,
           node,
+          pointerId: event.pointerId,
           startX: event.clientX,
           startY: event.clientY,
           originX: button.x,
           originY: button.y,
         };
-        node.setPointerCapture?.(event.pointerId);
+        node.classList.add("is-dragging");
+        try { node.setPointerCapture(event.pointerId); } catch (_) { /* older WebViews may not support capture */ }
       });
       node.addEventListener("pointermove", (event) => {
-        if (!layoutDrag || layoutDrag.node !== node) return;
+        if (!layoutDrag || layoutDrag.node !== node || layoutDrag.pointerId !== event.pointerId) return;
+        event.preventDefault();
         const rect = layoutPreview.getBoundingClientRect();
         const current = layoutButton(layoutDrag.id);
         if (!current || !rect.width || !rect.height) return;
@@ -468,8 +472,11 @@
         node.style.left = `${current.x * 100}%`;
         node.style.top = `${current.y * 100}%`;
       });
-      const finishDrag = () => {
-        if (!layoutDrag || layoutDrag.node !== node) return;
+      const finishDrag = (event) => {
+        if (!layoutDrag || layoutDrag.node !== node || (event && layoutDrag.pointerId !== event.pointerId)) return;
+        event?.preventDefault();
+        node.classList.remove("is-dragging");
+        try { if (node.hasPointerCapture?.(layoutDrag.pointerId)) node.releasePointerCapture(layoutDrag.pointerId); } catch (_) { /* capture may already be released */ }
         layoutDrag = null;
         renderLayoutSelect();
         renderLayoutPreview();
