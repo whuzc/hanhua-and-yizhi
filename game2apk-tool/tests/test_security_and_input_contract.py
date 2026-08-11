@@ -133,13 +133,13 @@ class SecurityAndInputContractTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         config = build_config()
         self.assertEqual(config["applicationId"], "com.game2apk.xianyaoshengcanver22")
-        self.assertEqual(config["versionCode"], 8)
-        self.assertEqual(config["versionName"], "1.3.0")
+        self.assertEqual(config["versionCode"], 9)
+        self.assertEqual(config["versionName"], "1.4.0")
 
         gradle = (root / "templates" / "android-rpgmv" / "app" / "build.gradle").read_text(encoding="utf-8")
         self.assertIn("com.game2apk.xianyaoshengcanver22", gradle)
-        self.assertIn("versionCode Integer.parseInt(requiredOrDefault('game2apkVersionCode', '8'))", gradle)
-        self.assertIn("versionName requiredOrDefault('game2apkVersionName', '1.3.0')", gradle)
+        self.assertIn("versionCode Integer.parseInt(requiredOrDefault('game2apkVersionCode', '9'))", gradle)
+        self.assertIn("versionName requiredOrDefault('game2apkVersionName', '1.4.0')", gradle)
 
         activity = (root / "templates" / "android-rpgmv" / "app" / "src" / "main" / "java" / "com" / "game2apk" / "rpgmv" / "MainActivity.java").read_text(encoding="utf-8")
         store = (root / "templates" / "android-rpgmv" / "app" / "src" / "main" / "java" / "com" / "game2apk" / "rpgmv" / "OverlayStateStore.java").read_text(encoding="utf-8")
@@ -164,8 +164,12 @@ class SecurityAndInputContractTests(unittest.TestCase):
     def test_cheat_overlay_and_whitelisted_mv_fields_are_present(self) -> None:
         root = Path(__file__).resolve().parents[1]
         overlay = (root / "templates" / "android-rpgmv" / "app" / "src" / "main" / "java" / "com" / "game2apk" / "rpgmv" / "OverlayView.java").read_text(encoding="utf-8")
+        config = (root / "templates" / "android-rpgmv" / "app" / "src" / "main" / "java" / "com" / "game2apk" / "rpgmv" / "Game2ApkConfig.java").read_text(encoding="utf-8")
         bridge = (root / "src" / "game2apk" / "patcher.py").read_text(encoding="utf-8")
         self.assertIn("CHEAT_HANDLE", overlay)
+        for token in ("LAYOUT_HANDLE", "showLayoutMenu", "showButtonEditor", "addCustomButtonDialog", "saveButtons", "EDIT_BUTTON"):
+            self.assertIn(token, overlay)
+        self.assertIn("CUSTOM_BUTTON_ID", config)
         for token in ("Game2ApkCheat", "999999999", "recallMapIds = [136, 97]", "2010", "2034", "2085", "cheat.discover", "dynamicCatalog", "switchFields"):
             self.assertIn(token, bridge)
 

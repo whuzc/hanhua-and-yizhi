@@ -103,8 +103,8 @@ class PipelineTests(unittest.TestCase):
     def test_default_update_identity_and_version_are_monotonic(self) -> None:
         data = build_config(control=default_control_config())
         self.assertEqual(data["applicationId"], "com.game2apk.xianyaoshengcanver22")
-        self.assertEqual(data["versionCode"], 8)
-        self.assertEqual(data["versionName"], "1.3.0")
+        self.assertEqual(data["versionCode"], 9)
+        self.assertEqual(data["versionName"], "1.4.0")
 
     def test_inspect_reports_mv_yep_resolution_keys_and_encryption_without_key(self) -> None:
         report = inspect_game(self.game)
@@ -251,6 +251,19 @@ class PipelineTests(unittest.TestCase):
         Path(stage.staged_www, "index.html").write_text(index.replace('js/rpg_core.js', 'js/rpg_core.js"></script><script src="js/rpg_core.js'), encoding="utf-8")
         with self.assertRaises(BlockedError):
             patch_staged_www(stage.staged_www, self._config())
+
+    def test_patch_maps_mobile_audio_to_the_actual_staged_extension(self) -> None:
+        report = inspect_game(self.game)
+        stage = StageService().stage(report, self.root / ".work", minimum_free_bytes=0)
+        audio = Path(stage.staged_www, "audio", "bgm")
+        audio.mkdir(parents=True)
+        (audio / "Theme6.ogg").write_bytes(b"OggS")
+        (audio / "Theme6.m4a").write_bytes(b"m4a")
+        result = patch_staged_www(stage.staged_www, self._config())
+        self.assertEqual(result["audioExtensionMapEntries"], 1)
+        managers = Path(stage.staged_www, "js", "rpg_managers.js").read_text(encoding="utf-8")
+        self.assertIn("game2apk per-file audio extension map", managers)
+        self.assertIn('"bgm/Theme6":".ogg"', managers)
 
     def test_advanced_cheat_selection_is_normalized_and_injected(self) -> None:
         system_path = self.www / "data" / "System.json"
@@ -764,13 +777,13 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn("android { androidResources", rendered_settings.read_text(encoding="utf-8"))
         def fake_tool(command):
             if "aapt2" in command[0]:
-                return 0, "package: name='com.game2apk.xianyaoshengcanver22' versionCode='8' versionName='1.3.0'\napplication: label='Demo' icon='@drawable/game2apk_launcher'\ndebuggable=false"
+                return 0, "package: name='com.game2apk.xianyaoshengcanver22' versionCode='9' versionName='1.4.0'\napplication: label='Demo' icon='@drawable/game2apk_launcher'\ndebuggable=false"
             if "apksigner" in command[0]:
                 return 0, "Verified using v2 scheme\nSigner #1 certificate SHA-256 digest: AA:BB"
             return 0, "Verification successful"
 
         with mock.patch("game2apk.verifier._run", side_effect=fake_tool):
-            verified = VerificationService().verify(result.apk_path, toolchain, result.started_at_utc, expected_application_id=self._config().application_id, expected_version_code=8)
+            verified = VerificationService().verify(result.apk_path, toolchain, result.started_at_utc, expected_application_id=self._config().application_id, expected_version_code=9)
             self.assertTrue(verified.passed)
             self.assertTrue(verified.signature_candidate)
             self.assertFalse(verified.device["verified"])

@@ -9,6 +9,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /** Versioned Android control configuration injected by the Windows generator. */
 public final class Game2ApkConfig {
@@ -16,6 +17,8 @@ public final class Game2ApkConfig {
     private static final String[] REQUIRED_BUTTON_IDS = {
             "up", "down", "left", "right", "confirm", "cancel", "esc", "portrait"
     };
+    private static final Pattern CUSTOM_BUTTON_ID =
+            Pattern.compile("custom_[a-z0-9][a-z0-9_-]{0,31}");
 
     public final int schemaVersion;
     public final TouchConfig touch;
@@ -73,8 +76,9 @@ public final class Game2ApkConfig {
             OverlayConfig overlay = new OverlayConfig(opacity, hiddenByDefault);
 
             JSONArray buttonArray = requiredArray(root, "buttons");
-            if (buttonArray.length() != REQUIRED_BUTTON_IDS.length) {
-                throw new ConfigException("buttons must contain exactly four directions and four actions");
+            if (buttonArray.length() < REQUIRED_BUTTON_IDS.length
+                    || buttonArray.length() > REQUIRED_BUTTON_IDS.length + 32) {
+                throw new ConfigException("buttons must contain the eight required buttons and at most 32 custom buttons");
             }
             List<ButtonConfig> buttons = new ArrayList<>();
             Set<String> ids = new HashSet<>();
@@ -88,30 +92,30 @@ public final class Game2ApkConfig {
                 if (!ids.add(id)) {
                     throw new ConfigException("duplicate button id: " + id);
                 }
-                int expectedKeyCode = expectedKeyCode(id);
-                String expectedMode = expectedMode(id);
-                if (expectedKeyCode < 0) {
+                boolean requiredButton = expectedKeyCode(id) >= 0;
+                if (!requiredButton && !CUSTOM_BUTTON_ID.matcher(id).matches()) {
                     throw new ConfigException("unsupported button id: " + id);
                 }
                 String label = requiredString(buttonJson, "label", "buttons[" + i + "].label");
                 int keyCode = checkedKeyCode(buttonJson, "keyCode", "buttons[" + i + "].keyCode");
-                if (keyCode != expectedKeyCode) {
-                    throw new ConfigException("button " + id + " must use keyCode " + expectedKeyCode);
-                }
                 String mode = requiredString(buttonJson, "mode", "buttons[" + i + "].mode");
-                if (!expectedMode.equals(mode)) {
-                    throw new ConfigException("button " + id + " must use mode " + expectedMode);
+                if (!"tap".equals(mode) && !"hold".equals(mode)) {
+                    throw new ConfigException("button " + id + " mode must be tap or hold");
                 }
+                boolean visible = !buttonJson.has("visible") || buttonJson.getBoolean("visible");
                 NormalizedRect rect = readButtonRect(buttonJson, i);
-                buttons.add(new ButtonConfig(id, label, keyCode, mode, rect));
+                buttons.add(new ButtonConfig(id, label, keyCode, mode, visible, rect));
             }
             Set<String> required = new HashSet<>();
             Collections.addAll(required, REQUIRED_BUTTON_IDS);
-            if (!required.equals(ids)) {
+            if (!ids.containsAll(required)) {
                 throw new ConfigException("buttons must include up/down/left/right/confirm/cancel/esc/portrait");
             }
             for (int index = 0; index < buttons.size(); index++) {
                 for (int other = index + 1; other < buttons.size(); other++) {
+                    if (!buttons.get(index).visible || !buttons.get(other).visible) {
+                        continue;
+                    }
                     if (overlaps(buttons.get(index).rect, buttons.get(other).rect)) {
                         throw new ConfigException("button layouts overlap: "
                                 + buttons.get(index).id + " and " + buttons.get(other).id);
@@ -256,14 +260,38 @@ public final class Game2ApkConfig {
         public final String label;
         public final int keyCode;
         public final String mode;
+        public final boolean visible;
         public final NormalizedRect rect;
 
-        private ButtonConfig(String id, String label, int keyCode, String mode, NormalizedRect rect) {
+        private ButtonConfig(String id, String label, int keyCode, String mode,
+                             boolean visible, NormalizedRect rect) {
             this.id = id;
             this.label = label;
             this.keyCode = keyCode;
             this.mode = mode;
+            this.visible = visible;
             this.rect = rect;
+        }
+
+        public static ButtonConfig custom(String id, String label, int keyCode,
+                                          String mode, boolean visible, NormalizedRect rect) {
+            if (id == null || !CUSTOM_BUTTON_ID.matcher(id).matches()) {
+                throw new IllegalArgumentException("invalid custom button id");
+            }
+            if (label == null || label.trim().isEmpty()) {
+                throw new IllegalArgumentException("custom button label is required");
+            }
+            if (keyCode < 0 || keyCode > 512 || (!"tap".equals(mode) && !"hold".equals(mode))) {
+                throw new IllegalArgumentException("invalid custom button binding");
+            }
+            return new ButtonConfig(id, label, keyCode, mode, visible, rect);
+        }
+
+        public ButtonConfig withValues(String nextLabel, int nextKeyCode,
+                                       String nextMode, boolean nextVisible,
+                                       NormalizedRect nextRect) {
+            return new ButtonConfig(id, nextLabel, nextKeyCode, nextMode,
+                    nextVisible, nextRect == null ? rect : nextRect);
         }
     }
 

@@ -16,7 +16,7 @@ from game2apk.resource_pack import (  # noqa: E402
     create_resource_pack,
     plan_resource_pack,
 )
-from game2apk.verifier import _stage_resource_pack_check  # noqa: E402
+from game2apk.verifier import _critical_assets, _stage_resource_pack_check  # noqa: E402
 
 
 class ResourcePackTests(unittest.TestCase):
@@ -70,6 +70,28 @@ class ResourcePackTests(unittest.TestCase):
         self.assertTrue(checked["passed"], checked)
         self.assertEqual(manifest["projectId"], "fixture-project")
         self.assertEqual(manifest["fileCount"], artifact.file_count)
+
+    def test_external_apk_does_not_require_bridge_in_apk_assets(self) -> None:
+        apk = self.root / "external.apk"
+        resource_config = {
+            "schemaVersion": 1,
+            "projectId": "fixture-project",
+            "fileName": "resources.g2ares",
+            "fileCount": 10,
+            "sourceBytes": 20,
+            "packBytes": 30,
+            "packSha256": "a" * 64,
+            "entryRoot": "www",
+            "startPath": "index.html",
+        }
+        with zipfile.ZipFile(apk, "w") as archive:
+            archive.writestr("assets/www/index.html", "<html></html>")
+            archive.writestr("assets/www/js/rpg_core.js", "window.RPGCore=true;")
+            archive.writestr("assets/game2apk/config.json", "{}")
+            archive.writestr("assets/game2apk/resource-pack.json", json.dumps(resource_config))
+        checked = _critical_assets(apk)
+        self.assertTrue(checked["passed"], checked)
+        self.assertNotIn("assets/www/js/game2apk-input.js", checked["required"])
 
 
 if __name__ == "__main__":

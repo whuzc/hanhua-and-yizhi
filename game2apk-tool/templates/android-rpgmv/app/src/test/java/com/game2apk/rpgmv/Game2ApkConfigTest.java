@@ -43,6 +43,20 @@ public final class Game2ApkConfigTest {
     }
 
     @Test
+    public void parsesRuntimeCustomButtonAndVisibility() throws Exception {
+        // Keep the eight required controls and append one runtime-editable
+        // custom button with a hidden initial state.
+        String custom = VALID.substring(0, VALID.length() - 2)
+                + ", {\"id\":\"custom_1\",\"label\":\"Menu\",\"keyCode\":77,"
+                + "\"mode\":\"tap\",\"visible\":false,\"x\":0.52,\"y\":0.10,"
+                + "\"width\":0.10,\"height\":0.10}]" + "}";
+        Game2ApkConfig config = Game2ApkConfig.parse(custom);
+        assertEquals(9, config.buttons.size());
+        assertEquals(77, find(config, "custom_1").keyCode);
+        assertTrue(!find(config, "custom_1").visible);
+    }
+
+    @Test
     public void legacyTapAndJoystickAreRejected() {
         try {
             Game2ApkConfig.parse(VALID.replace("\"touch\":", "\"joystick\":{},\"touch\":"));

@@ -1,15 +1,27 @@
 package com.game2apk.rpgmv;
 
 import android.content.Context;
+import android.content.DialogInterface;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.os.SystemClock;
+import android.text.InputType;
 import android.view.MotionEvent;
 import android.view.View;
+import android.widget.ArrayAdapter;
+import android.widget.CheckBox;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.Spinner;
+import android.widget.TextView;
+import android.widget.Toast;
+import android.app.AlertDialog;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -26,6 +38,8 @@ public final class OverlayView extends View {
             NormalizedRect.fromXYWH(0.94f, 0.02f, 0.055f, 0.065f);
     private static final NormalizedRect CHEAT_HANDLE =
             NormalizedRect.fromXYWH(0.87f, 0.02f, 0.065f, 0.065f);
+    private static final NormalizedRect LAYOUT_HANDLE =
+            NormalizedRect.fromXYWH(0.79f, 0.02f, 0.065f, 0.065f);
     private static final NormalizedRect HIDDEN_RECOVERY_HANDLE =
             NormalizedRect.fromXYWH(0.94f, 0.90f, 0.055f, 0.065f);
 
@@ -38,6 +52,8 @@ public final class OverlayView extends View {
         HIDE_HANDLE,
         RECOVERY_HANDLE,
         CHEAT_HANDLE,
+        LAYOUT_HANDLE,
+        EDIT_BUTTON,
         PASSIVE,
         THREE_FINGER
     }
@@ -47,6 +63,7 @@ public final class OverlayView extends View {
         HIDE_HANDLE,
         RECOVERY_HANDLE,
         CHEAT_HANDLE,
+        LAYOUT_HANDLE,
         GAME
     }
 
@@ -65,15 +82,20 @@ public final class OverlayView extends View {
         public final int takeoverReason;
         public final int pointerId;
         private final Hit hit;
+        private final float startX;
+        private final float startY;
 
-        private NativeTouchObservation(int takeoverReason, int pointerId, Hit hit) {
+        private NativeTouchObservation(int takeoverReason, int pointerId, Hit hit,
+                                       float startX, float startY) {
             this.takeoverReason = takeoverReason;
             this.pointerId = pointerId;
             this.hit = hit;
+            this.startX = startX;
+            this.startY = startY;
         }
 
         private static NativeTouchObservation none() {
-            return new NativeTouchObservation(0, -1, null);
+            return new NativeTouchObservation(0, -1, null, 0.0f, 0.0f);
         }
     }
 
@@ -81,6 +103,7 @@ public final class OverlayView extends View {
     private final KeySink keySink;
     private final OverlayStateStore stateStore;
     private OverlayLayout layout;
+    private final List<Game2ApkConfig.ButtonConfig> buttons = new ArrayList<>();
     private float opacity;
     private final OverlayVisibilityStateMachine visibility;
     private final KeyPulseStateMachine pulses;
@@ -88,7 +111,12 @@ public final class OverlayView extends View {
     private final TwoFingerTapGestureStateMachine twoFinger;
     private final Map<Integer, PointerKind> pointerKinds = new HashMap<>();
     private final Map<Integer, Game2ApkConfig.ButtonConfig> buttonsByPointer = new HashMap<>();
+    private final Map<Integer, Float> dragStartX = new HashMap<>();
+    private final Map<Integer, Float> dragStartY = new HashMap<>();
+    private final Map<Integer, NormalizedRect> dragStartRect = new HashMap<>();
+    private final Map<Integer, Boolean> dragMoved = new HashMap<>();
     private boolean nativeGameTracking;
+    private boolean editMode;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Runnable visibilityRunnable = new Runnable() {
@@ -107,6 +135,8 @@ public final class OverlayView extends View {
         this.config = config;
         this.keySink = keySink;
         this.stateStore = stateStore;
+        this.buttons.addAll(state.buttons == null || state.buttons.isEmpty()
+                ? config.buttons : state.buttons);
         this.layout = state.layout;
         this.opacity = state.opacity;
         this.visibility = new OverlayVisibilityStateMachine(state.hidden);
@@ -161,13 +191,24 @@ public final class OverlayView extends View {
             drawHandle(canvas, HIDDEN_RECOVERY_HANDLE, "+");
             return;
         }
-        for (Game2ApkConfig.ButtonConfig button : config.buttons) {
+        for (Game2ApkConfig.ButtonConfig button : buttons) {
+            if (!button.visible) {
+                continue;
+            }
             NormalizedRect normalized = layout.buttonRect(button.id);
             if (normalized != null) {
                 drawButton(canvas, normalized, button.label);
             }
         }
         drawHandle(canvas, VISIBLE_HIDE_HANDLE, "-");
+        drawHandle(canvas, LAYOUT_HANDLE, "\u5e03\u5c40");
+        if (editMode) {
+            textPaint.setTextAlign(Paint.Align.LEFT);
+            textPaint.setTextSize(Math.max(11.0f, getHeight() * 0.022f));
+            textPaint.setColor(withOpacity(Color.WHITE, 0.92f));
+            canvas.drawText("\u5e03\u5c40\u7f16\u8f91\uff1a\u62d6\u52a8\u6309\u952e\uff0c\u70b9\u51fb\u6309\u952e\u7f16\u8f91",
+                    Math.max(8.0f, getWidth() * 0.02f), Math.max(20.0f, getHeight() * 0.055f), textPaint);
+        }
         drawHandle(canvas, CHEAT_HANDLE, "作弊");
     }
 
@@ -238,7 +279,8 @@ public final class OverlayView extends View {
                     twoFinger.onThreeFingerDetected();
                     scheduleVisibilityCheck();
                     return new NativeTouchObservation(
-                            TAKEOVER_THREE_OR_MORE, pointerId, null);
+                            TAKEOVER_THREE_OR_MORE, pointerId, null,
+                            event.getX(index), event.getY(index));
                 }
                 Hit hit = hitTest(normalizedX(event.getX(index)), normalizedY(event.getY(index)));
                 TwoFingerTapGestureStateMachine.Region region = hit.kind == HitKind.GAME
@@ -248,10 +290,12 @@ public final class OverlayView extends View {
                         pointerId, region, event.getX(index), event.getY(index), now);
                 scheduleVisibilityCheck();
                 if (hit.kind != HitKind.GAME) {
-                    return new NativeTouchObservation(TAKEOVER_CONTROL, pointerId, hit);
+                    return new NativeTouchObservation(TAKEOVER_CONTROL, pointerId, hit,
+                            event.getX(index), event.getY(index));
                 }
                 if (outcome == TwoFingerTapGestureStateMachine.Outcome.SECOND_FINGER) {
-                    return new NativeTouchObservation(TAKEOVER_GAME_TWO_FINGER, pointerId, hit);
+                    return new NativeTouchObservation(TAKEOVER_GAME_TWO_FINGER, pointerId, hit,
+                            event.getX(index), event.getY(index));
                 }
                 return NativeTouchObservation.none();
             }
@@ -276,7 +320,8 @@ public final class OverlayView extends View {
             return;
         }
         if (observation.takeoverReason == TAKEOVER_CONTROL && observation.hit != null) {
-            registerControlPointer(observation.pointerId, observation.hit);
+            registerControlPointer(observation.pointerId, observation.hit,
+                    observation.startX, observation.startY);
         } else if (observation.takeoverReason == TAKEOVER_THREE_OR_MORE) {
             pointerKinds.put(observation.pointerId, PointerKind.THREE_FINGER);
         }
@@ -301,6 +346,7 @@ public final class OverlayView extends View {
                     }
                     twoFinger.onPointerMove(event.getPointerId(index), event.getX(index), event.getY(index), now);
                 }
+                moveEditPointers(event);
                 tickVisibility(now);
                 break;
             case MotionEvent.ACTION_POINTER_UP:
@@ -334,7 +380,7 @@ public final class OverlayView extends View {
         if (hit.kind == HitKind.GAME) {
             pointerKinds.put(pointerId, PointerKind.PASSIVE);
         } else {
-            registerControlPointer(pointerId, hit);
+            registerControlPointer(pointerId, hit, event.getX(index), event.getY(index));
         }
         scheduleVisibilityCheck();
     }
@@ -348,6 +394,8 @@ public final class OverlayView extends View {
             if (button != null && "hold".equals(button.mode)) {
                 apply(held.onPointerUp(pointerId));
             }
+        } else if (kind == PointerKind.EDIT_BUTTON) {
+            finishEditPointer(pointerId);
         } else if (kind == PointerKind.HIDE_HANDLE) {
             setHidden(true);
         } else if (kind == PointerKind.RECOVERY_HANDLE) {
@@ -356,6 +404,8 @@ public final class OverlayView extends View {
             }
         } else if (kind == PointerKind.CHEAT_HANDLE) {
             keySink.openCheatPanel();
+        } else if (kind == PointerKind.LAYOUT_HANDLE) {
+            showLayoutMenu();
         }
         TwoFingerTapGestureStateMachine.Outcome outcome = twoFinger.onPointerUp(pointerId, now);
         if (outcome == TwoFingerTapGestureStateMachine.Outcome.CANCEL) {
@@ -368,6 +418,10 @@ public final class OverlayView extends View {
             removeCallbacks(visibilityRunnable);
             pointerKinds.clear();
             buttonsByPointer.clear();
+            dragStartX.clear();
+            dragStartY.clear();
+            dragStartRect.clear();
+            dragMoved.clear();
         }
     }
 
@@ -423,6 +477,7 @@ public final class OverlayView extends View {
                 if (pointerKinds.isEmpty()) {
                     return false;
                 }
+                moveEditPointers(event);
                 tickVisibility(now);
                 return true;
             case MotionEvent.ACTION_POINTER_UP:
@@ -459,7 +514,7 @@ public final class OverlayView extends View {
             pointerKinds.put(pointerId, PointerKind.PASSIVE);
             return true;
         }
-        registerControlPointer(pointerId, hit);
+        registerControlPointer(pointerId, hit, event.getX(index), event.getY(index));
         scheduleVisibilityCheck();
         invalidate();
         return true;
@@ -474,6 +529,8 @@ public final class OverlayView extends View {
             if (button != null && "hold".equals(button.mode)) {
                 apply(held.onPointerUp(pointerId));
             }
+        } else if (kind == PointerKind.EDIT_BUTTON) {
+            finishEditPointer(pointerId);
         } else if (kind == PointerKind.HIDE_HANDLE) {
             setHidden(true);
         } else if (kind == PointerKind.RECOVERY_HANDLE) {
@@ -482,22 +539,40 @@ public final class OverlayView extends View {
             }
         } else if (kind == PointerKind.CHEAT_HANDLE) {
             keySink.openCheatPanel();
+        } else if (kind == PointerKind.LAYOUT_HANDLE) {
+            showLayoutMenu();
         }
         visibility.onPointerUp(pointerId);
         tickVisibility(now);
         if (event.getActionMasked() == MotionEvent.ACTION_UP) {
             pointerKinds.clear();
             buttonsByPointer.clear();
+            dragStartX.clear();
+            dragStartY.clear();
+            dragStartRect.clear();
+            dragMoved.clear();
         }
     }
 
-    private void registerControlPointer(int pointerId, Hit hit) {
+    private void registerControlPointer(int pointerId, Hit hit, float startX, float startY) {
         if (hit == null) {
             pointerKinds.put(pointerId, PointerKind.PASSIVE);
             return;
         }
         switch (hit.kind) {
             case BUTTON:
+                if (editMode) {
+                    pointerKinds.put(pointerId, PointerKind.EDIT_BUTTON);
+                    buttonsByPointer.put(pointerId, hit.button);
+                    dragStartX.put(pointerId, startX);
+                    dragStartY.put(pointerId, startY);
+                    NormalizedRect startRect = layout.buttonRect(hit.button.id);
+                    if (startRect != null) {
+                        dragStartRect.put(pointerId, startRect);
+                    }
+                    dragMoved.put(pointerId, false);
+                    break;
+                }
                 pointerKinds.put(pointerId, PointerKind.BUTTON);
                 buttonsByPointer.put(pointerId, hit.button);
                 if ("hold".equals(hit.button.mode)) {
@@ -515,11 +590,312 @@ public final class OverlayView extends View {
             case CHEAT_HANDLE:
                 pointerKinds.put(pointerId, PointerKind.CHEAT_HANDLE);
                 break;
+            case LAYOUT_HANDLE:
+                pointerKinds.put(pointerId, PointerKind.LAYOUT_HANDLE);
+                break;
             case GAME:
             default:
                 pointerKinds.put(pointerId, PointerKind.PASSIVE);
                 break;
         }
+    }
+
+    private void moveEditPointers(MotionEvent event) {
+        if (!editMode || event == null || pointerKinds.isEmpty()) {
+            return;
+        }
+        for (Map.Entry<Integer, PointerKind> entry : pointerKinds.entrySet()) {
+            if (entry.getValue() != PointerKind.EDIT_BUTTON) {
+                continue;
+            }
+            int pointerId = entry.getKey();
+            int index = event.findPointerIndex(pointerId);
+            Game2ApkConfig.ButtonConfig button = buttonsByPointer.get(pointerId);
+            NormalizedRect start = dragStartRect.get(pointerId);
+            if (index < 0 || button == null || start == null) {
+                continue;
+            }
+            float dx = normalizedX(event.getX(index)) - normalizedX(dragStartX.get(pointerId));
+            float dy = normalizedY(event.getY(index)) - normalizedY(dragStartY.get(pointerId));
+            if (Math.abs(dx) < 0.0005f && Math.abs(dy) < 0.0005f) {
+                continue;
+            }
+            NormalizedRect candidate = movedRect(start, dx, dy);
+            try {
+                layout = layout.withButtonRect(button.id, candidate);
+                if (Math.abs(dx) > 0.008f || Math.abs(dy) > 0.008f) {
+                    dragMoved.put(pointerId, true);
+                }
+                invalidate();
+            } catch (IllegalArgumentException ignored) {
+                // Do not allow a drag to overlap another control. The last
+                // valid position remains active and can still be saved.
+            }
+        }
+    }
+
+    private NormalizedRect movedRect(NormalizedRect start, float dx, float dy) {
+        float left = clamp(start.left + dx, 0.0f, 1.0f - start.width());
+        float top = clamp(start.top + dy, 0.0f, 1.0f - start.height());
+        return NormalizedRect.fromXYWH(left, top, start.width(), start.height());
+    }
+
+    private static float clamp(float value, float min, float max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private void finishEditPointer(int pointerId) {
+        Game2ApkConfig.ButtonConfig button = buttonsByPointer.remove(pointerId);
+        boolean moved = Boolean.TRUE.equals(dragMoved.remove(pointerId));
+        dragStartX.remove(pointerId);
+        dragStartY.remove(pointerId);
+        dragStartRect.remove(pointerId);
+        if (button == null) {
+            return;
+        }
+        if (moved) {
+            persistLayoutState();
+        } else {
+            showButtonEditor(button);
+        }
+    }
+
+    private void persistLayoutState() {
+        stateStore.saveLayout(layout);
+        stateStore.saveButtons(buttons);
+        invalidate();
+    }
+
+    private void showLayoutMenu() {
+        final String[] items = {
+                "\u5f00\u542f\u62d6\u52a8\u4e0e\u7f16\u8f91",
+                "\u6dfb\u52a0\u81ea\u5b9a\u4e49\u6309\u952e",
+                "\u6062\u590d\u9ed8\u8ba4\u5e03\u5c40",
+                "\u5173\u95ed\u5e03\u5c40\u7f16\u8f91"
+        };
+        new AlertDialog.Builder(getContext())
+                .setTitle("\u60ac\u6d6e\u6309\u952e\u5e03\u5c40")
+                .setItems(items, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        if (which == 0) {
+                            editMode = true;
+                            invalidate();
+                        } else if (which == 1) {
+                            addCustomButtonDialog();
+                        } else if (which == 2) {
+                            resetLayoutEditor();
+                        } else {
+                            editMode = false;
+                            invalidate();
+                        }
+                    }
+                })
+                .setNegativeButton("\u53d6\u6d88", null)
+                .show();
+    }
+
+    private void showButtonEditor(final Game2ApkConfig.ButtonConfig button) {
+        if (button == null) return;
+        LinearLayout form = new LinearLayout(getContext());
+        form.setOrientation(LinearLayout.VERTICAL);
+        int padding = Math.max(12, getResources().getDisplayMetrics().densityDpi / 2);
+        form.setPadding(padding, padding, padding, 0);
+
+        TextView hint = new TextView(getContext());
+        hint.setText(button.id.startsWith("custom_")
+                ? "\u81ea\u5b9a\u4e49\u6309\u952e\uff1a\u53ef\u4fee\u6539\u6807\u7b7e\u3001\u952e\u503c\u548c\u6309\u4e0b\u6a21\u5f0f"
+                : "\u65b9\u5411\u952e\u4fdd\u6301\u539f\u59cb\u952e\u503c\uff0c\u53f3\u4fa7\u6309\u952e\u53ef\u91cd\u65b0\u7ed1\u5b9a");
+        form.addView(hint);
+
+        EditText label = new EditText(getContext());
+        label.setHint("\u663e\u793a\u540d\u79f0");
+        label.setText(button.label);
+        label.setSingleLine(true);
+        form.addView(label);
+
+        EditText keyCode = new EditText(getContext());
+        keyCode.setHint("\u952e\u503c\uff08KeyboardEvent keyCode\uff09");
+        keyCode.setInputType(InputType.TYPE_CLASS_NUMBER);
+        keyCode.setText(String.valueOf(button.keyCode));
+        form.addView(keyCode);
+
+        Spinner mode = new Spinner(getContext());
+        ArrayAdapter<String> modes = new ArrayAdapter<>(getContext(),
+                android.R.layout.simple_spinner_dropdown_item,
+                new String[]{"tap", "hold"});
+        mode.setAdapter(modes);
+        mode.setSelection("hold".equals(button.mode) ? 1 : 0);
+        form.addView(mode);
+
+        CheckBox visible = new CheckBox(getContext());
+        visible.setText("\u663e\u793a\u8fd9\u4e2a\u6309\u952e");
+        visible.setChecked(button.visible);
+        form.addView(visible);
+
+        boolean directional = "up".equals(button.id) || "down".equals(button.id)
+                || "left".equals(button.id) || "right".equals(button.id);
+        keyCode.setEnabled(!directional);
+        mode.setEnabled(!directional);
+        final AlertDialog dialog = new AlertDialog.Builder(getContext())
+                .setTitle("\u7f16\u8f91\uff1a" + button.label)
+                .setView(form)
+                .setNegativeButton("\u53d6\u6d88", null)
+                .setPositiveButton("\u4fdd\u5b58", null)
+                .create();
+        if (button.id.startsWith("custom_")) {
+            dialog.setButton(DialogInterface.BUTTON_NEUTRAL, "\u5220\u9664", (d, which) -> {
+                removeButton(button.id);
+            });
+        }
+        dialog.setOnShowListener(new DialogInterface.OnShowListener() {
+            @Override
+            public void onShow(DialogInterface ignored) {
+                dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(v -> {
+                    String nextLabel = label.getText().toString().trim();
+                    if (nextLabel.isEmpty()) nextLabel = button.label;
+                    if (nextLabel.length() > 40) nextLabel = nextLabel.substring(0, 40);
+                    int nextKey = button.keyCode;
+                    try {
+                        nextKey = Integer.parseInt(keyCode.getText().toString().trim());
+                    } catch (NumberFormatException ignoredNumber) {
+                        // Keep the previous valid binding when input is blank.
+                    }
+                    if (nextKey < 0 || nextKey > 512) nextKey = button.keyCode;
+                    String nextMode = directional ? button.mode : (String) mode.getSelectedItem();
+                    replaceButton(button.id, button.withValues(nextLabel, nextKey,
+                            nextMode, visible.isChecked(), button.rect));
+                    dialog.dismiss();
+                });
+            }
+        });
+        dialog.show();
+    }
+
+    private void replaceButton(String id, Game2ApkConfig.ButtonConfig replacement) {
+        for (int index = 0; index < buttons.size(); index++) {
+            if (id.equals(buttons.get(index).id)) {
+                buttons.set(index, replacement);
+                persistLayoutState();
+                return;
+            }
+        }
+    }
+
+    private void removeButton(String id) {
+        if (!id.startsWith("custom_")) return;
+        List<Game2ApkConfig.ButtonConfig> remaining = new ArrayList<>();
+        for (Game2ApkConfig.ButtonConfig button : buttons) {
+            if (!id.equals(button.id)) remaining.add(button);
+        }
+        buttons.clear();
+        buttons.addAll(remaining);
+        Map<String, NormalizedRect> rects = new LinkedHashMap<>();
+        for (Game2ApkConfig.ButtonConfig button : buttons) {
+            NormalizedRect rect = layout.buttonRect(button.id);
+            rects.put(button.id, rect == null ? button.rect : rect);
+        }
+        try {
+            layout = new OverlayLayout(rects);
+        } catch (IllegalArgumentException ignored) {
+            layout = OverlayLayout.fromConfig(buttons);
+        }
+        persistLayoutState();
+    }
+
+    private void addCustomButtonDialog() {
+        if (buttons.size() >= 40) {
+            Toast.makeText(getContext(), "\u81ea\u5b9a\u4e49\u6309\u952e\u5df2\u8fbe\u4e0a\u9650", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final EditText label = new EditText(getContext());
+        label.setHint("\u6309\u952e\u540d\u79f0\uff08\u4f8b\u5982\uff1a\u5feb\u6377\u952e\uff09");
+        label.setSingleLine(true);
+        final EditText keyCode = new EditText(getContext());
+        keyCode.setHint("\u952e\u503c\uff08\u9ed8\u8ba4 65=A\uff09");
+        keyCode.setInputType(InputType.TYPE_CLASS_NUMBER);
+        keyCode.setText("65");
+        LinearLayout form = new LinearLayout(getContext());
+        form.setOrientation(LinearLayout.VERTICAL);
+        int padding = Math.max(12, getResources().getDisplayMetrics().densityDpi / 2);
+        form.setPadding(padding, padding, padding, 0);
+        form.addView(label);
+        form.addView(keyCode);
+        new AlertDialog.Builder(getContext())
+                .setTitle("\u6dfb\u52a0\u81ea\u5b9a\u4e49\u6309\u952e")
+                .setView(form)
+                .setNegativeButton("\u53d6\u6d88", null)
+                .setPositiveButton("\u6dfb\u52a0", (dialog, which) -> {
+                    String nextLabel = label.getText().toString().trim();
+                    if (nextLabel.isEmpty()) nextLabel = "\u81ea\u5b9a\u4e49";
+                    if (nextLabel.length() > 40) nextLabel = nextLabel.substring(0, 40);
+                    int nextKey = 65;
+                    try {
+                        nextKey = Integer.parseInt(keyCode.getText().toString().trim());
+                    } catch (NumberFormatException ignored) {}
+                    nextKey = Math.max(0, Math.min(512, nextKey));
+                    NormalizedRect rect = findAvailableRect();
+                    if (rect == null) {
+                        Toast.makeText(getContext(), "\u53f3\u4fa7\u6ca1\u6709\u53ef\u7528\u7a7a\u95f4", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    String id = nextCustomId();
+                    try {
+                        Game2ApkConfig.ButtonConfig button = Game2ApkConfig.ButtonConfig.custom(
+                                id, nextLabel, nextKey, "tap", true, rect);
+                        buttons.add(button);
+                        layout = layout.withButtonRect(id, rect);
+                        persistLayoutState();
+                    } catch (IllegalArgumentException ignored) {
+                        Toast.makeText(getContext(), "\u81ea\u5b9a\u4e49\u6309\u952e\u521b\u5efa\u5931\u8d25", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .show();
+    }
+
+    private String nextCustomId() {
+        for (int index = 1; index <= 999; index++) {
+            String candidate = "custom_" + index;
+            boolean used = false;
+            for (Game2ApkConfig.ButtonConfig button : buttons) {
+                if (candidate.equals(button.id)) {
+                    used = true;
+                    break;
+                }
+            }
+            if (!used) return candidate;
+        }
+        return "custom_" + SystemClock.uptimeMillis();
+    }
+
+    private NormalizedRect findAvailableRect() {
+        for (int row = 0; row < 8; row++) {
+            NormalizedRect candidate = NormalizedRect.fromXYWH(
+                    0.68f, 0.12f + row * 0.105f, 0.12f, 0.075f);
+            boolean overlap = false;
+            for (Game2ApkConfig.ButtonConfig button : buttons) {
+                NormalizedRect rect = layout.buttonRect(button.id);
+                if (rect != null && overlaps(candidate, rect)) {
+                    overlap = true;
+                    break;
+                }
+            }
+            if (!overlap) return candidate;
+        }
+        return null;
+    }
+
+    private static boolean overlaps(NormalizedRect left, NormalizedRect right) {
+        return left.left < right.right && right.left < left.right
+                && left.top < right.bottom && right.top < left.bottom;
+    }
+
+    private void resetLayoutEditor() {
+        editMode = false;
+        buttons.clear();
+        buttons.addAll(config.buttons);
+        layout = OverlayLayout.fromConfig(buttons);
+        persistLayoutState();
     }
 
     private void tickVisibility(long now) {
@@ -546,6 +922,10 @@ public final class OverlayView extends View {
         pulses.releaseAll();
         pointerKinds.clear();
         buttonsByPointer.clear();
+        dragStartX.clear();
+        dragStartY.clear();
+        dragStartRect.clear();
+        dragMoved.clear();
         twoFinger.cancel();
         nativeGameTracking = false;
         visibility.clearPointers();
@@ -564,7 +944,13 @@ public final class OverlayView extends View {
         if (CHEAT_HANDLE.contains(x, y)) {
             return new Hit(HitKind.CHEAT_HANDLE, null);
         }
-        for (Game2ApkConfig.ButtonConfig button : config.buttons) {
+        if (LAYOUT_HANDLE.contains(x, y)) {
+            return new Hit(HitKind.LAYOUT_HANDLE, null);
+        }
+        for (Game2ApkConfig.ButtonConfig button : buttons) {
+            if (!button.visible) {
+                continue;
+            }
             NormalizedRect rect = layout.buttonRect(button.id);
             if (rect != null && rect.contains(x, y)) {
                 return new Hit(HitKind.BUTTON, button);

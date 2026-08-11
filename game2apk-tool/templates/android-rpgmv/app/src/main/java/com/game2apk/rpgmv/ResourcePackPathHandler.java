@@ -1,6 +1,7 @@
 package com.game2apk.rpgmv;
 
 import android.webkit.WebResourceResponse;
+import android.net.Uri;
 
 import androidx.webkit.WebViewAssetLoader;
 
@@ -28,7 +29,10 @@ public final class ResourcePackPathHandler implements WebViewAssetLoader.PathHan
 
     @Override
     public WebResourceResponse handle(String path) {
-        String entryName = safeEntryName(path);
+        // WebViewAssetLoader versions differ on whether PathHandler receives
+        // an encoded or decoded path.  Decode exactly once so Chinese and
+        // space-containing audio/image names resolve identically on both.
+        String entryName = safeEntryName(Uri.decode(path));
         if (entryName == null) {
             return null;
         }
@@ -129,7 +133,9 @@ public final class ResourcePackPathHandler implements WebViewAssetLoader.PathHan
         if (lower.endsWith(".css")) return "text/css";
         if (lower.endsWith(".html")) return "text/html";
         if (lower.endsWith(".ogg")) return "audio/ogg";
+        if (lower.endsWith(".rpgmvo")) return "audio/ogg";
         if (lower.endsWith(".m4a")) return "audio/mp4";
+        if (lower.endsWith(".rpgmvm")) return "audio/mp4";
         return "application/octet-stream";
     }
 }

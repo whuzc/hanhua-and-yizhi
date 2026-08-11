@@ -233,12 +233,15 @@ class BuildRequest:
             raise ConfigurationError("version_code must be an integer") from exc
         if not isinstance(app_name, str) or not isinstance(application_id, str) or not isinstance(version_name, str):
             raise ConfigurationError("app_name, application_id and version_name must be text")
+        control_payload = _payload_value(payload, "control", default=None)
+        if control_payload is not None and not isinstance(control_payload, dict):
+            raise ConfigurationError("control must be an object")
         data = build_config(
             app_name=app_name,
             application_id=application_id,
             version_code=version_code,
             version_name=str(version_name),
-            control=default_control_config(),
+            control=control_payload if isinstance(control_payload, dict) else default_control_config(),
             advanced_cheat_variable_ids=normalize_advanced_cheat_variable_ids(
                 _payload_value(
                     payload,

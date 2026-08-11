@@ -1,8 +1,10 @@
 # game2apk-tool
 
-当前发布版本：`v1.4.0`。本版新增超大 MV 项目的 APK + ZIP64 外部资源包模式；保留高级作弊 high/max 思考模式的单路、小批次内存保护。
+布局编辑、超大项目外部资源包和 Android 音频修复的独立说明见 [docs/layout-editor.md](docs/layout-editor.md)。
 
-当前发布版本为工具 `v1.4.0`；生成 APK 默认 versionCode `8`、versionName `1.3.0`（由 7/1.2.0 升级），包含动态作弊菜单、可逆无敌、战斗胜负控制、事件回想传送、加密音频修复，以及签名产物命名、日文作弊标签简体中文文档翻译、正文上下文 TXT 翻译、高级作弊变量选择、高级标签缓存隔离、高思考小批次保护和超大项目外部资源包。
+当前发布版本：`v1.5.0`。本版修复超大 MV 项目的外置资源包验收误报和 Android WebView 的 OGG 音频误请求，并新增桌面/运行时悬浮按键布局编辑。
+
+当前发布版本为工具 `v1.5.0`；生成 APK 默认 versionCode `9`、versionName `1.4.0`（由 8/1.3.0 升级），包含动态作弊菜单、可逆无敌、战斗胜负控制、事件回想传送、加密音频修复、超大项目外部资源包、桌面布局预览和 APK 内运行时布局编辑，以及签名产物命名、日文作弊标签简体中文文档翻译、正文上下文 TXT 翻译、高级作弊变量选择、高级标签缓存隔离和高思考小批次保护。
 
 Windows 本地工具：检查 RPG Maker MV、在受标记的 `.work` 副本中暂存和补丁、可选离线翻译、Gradle 构建、稳定签名并做 APK 静态验收。原游戏目录只读；本项目不生成 AAB。
 
@@ -15,7 +17,7 @@ $env:PYTHONPATH = (Resolve-Path .\game2apk-tool\src).Path
 python .\game2apk-tool\scripts\game2apk.py inspect ".\仙肴圣餐超魔改 Ver22"
 python .\game2apk-tool\scripts\game2apk.py run ".\仙肴圣餐超魔改 Ver22" `
   --template .\game2apk-tool\templates\android-rpgmv `
-  --version-code 8 --version-name 1.3.0
+  --version-code 9 --version-name 1.4.0
 ```
 
 签名密码默认优先读取稳定 `applicationId` 对应的 Windows DPAPI 凭据。首次创建或 standalone 签名只能使用 `--password-env NAME`、`--password-stdin` 或 `--password-prompt`；`run` 对应为 `--sign-password-env NAME`、`--sign-password-stdin` 或 `--sign-password-prompt`。DeepSeek 只允许 `--api-key-env NAME`、`--api-key-stdin` 或 `--api-key-prompt`，其中 argv 只出现环境变量名，不出现秘密值。旧的 `--api-key VALUE`、`--password VALUE`、`--sign-password VALUE` 及等价 raw-secret 参数会被拒绝。
@@ -159,7 +161,7 @@ $env:PYTHONPATH = (Resolve-Path .\game2apk-tool\src).Path
 python .\game2apk-tool\scripts\game2apk.py inspect ".\我的MV项目"
 python .\game2apk-tool\scripts\game2apk.py run ".\我的MV项目" `
   --template .\game2apk-tool\templates\android-rpgmv `
-  --version-code 8 --version-name 1.3.0 `
+  --version-code 9 --version-name 1.4.0 `
   --sign-password-prompt
 ```
 

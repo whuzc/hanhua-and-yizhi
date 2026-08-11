@@ -27,6 +27,17 @@
   const prepareCheatVariablesButton = $("#prepare-cheat-variables");
   const selectAllCheatVariablesButton = $("#select-all-cheat-variables");
   const clearCheatVariablesButton = $("#clear-cheat-variables");
+  const layoutPreview = $("#layout-preview");
+  const layoutState = $("#layout-state");
+  const layoutSelect = $("#layout-button-select");
+  const layoutLabel = $("#layout-button-label");
+  const layoutKey = $("#layout-button-key");
+  const layoutMode = $("#layout-button-mode");
+  const layoutVisible = $("#layout-button-visible");
+  const layoutAddButton = $("#layout-add-button");
+  const layoutResetButton = $("#layout-reset-button");
+  const layoutSaveButton = $("#layout-save-button");
+  const layoutDeleteButton = $("#layout-delete-button");
   const downloadButtons = [$("#download-android"), $("#download-jdk")];
   const root = document.documentElement;
 
@@ -53,6 +64,19 @@
   let lastJobMessage = "";
   let reportStickToBottom = true;
   let pollFailureCount = 0;
+  const DEFAULT_LAYOUT_BUTTONS = [
+    { id: "left", label: "←", keyCode: 37, mode: "hold", x: 0.04, y: 0.80, width: 0.10, height: 0.12, visible: true },
+    { id: "up", label: "↑", keyCode: 38, mode: "hold", x: 0.15, y: 0.67, width: 0.10, height: 0.12, visible: true },
+    { id: "down", label: "↓", keyCode: 40, mode: "hold", x: 0.15, y: 0.82, width: 0.10, height: 0.12, visible: true },
+    { id: "right", label: "→", keyCode: 39, mode: "hold", x: 0.26, y: 0.80, width: 0.10, height: 0.12, visible: true },
+    { id: "confirm", label: "OK", keyCode: 13, mode: "tap", x: 0.67, y: 0.58, width: 0.14, height: 0.10, visible: true },
+    { id: "cancel", label: "X", keyCode: 88, mode: "tap", x: 0.83, y: 0.58, width: 0.14, height: 0.10, visible: true },
+    { id: "esc", label: "ESC", keyCode: 27, mode: "tap", x: 0.67, y: 0.71, width: 0.14, height: 0.10, visible: true },
+    { id: "portrait", label: "A", keyCode: 65, mode: "tap", x: 0.83, y: 0.71, width: 0.14, height: 0.10, visible: true },
+  ];
+  let layoutButtons = DEFAULT_LAYOUT_BUTTONS.map((button) => ({ ...button }));
+  let selectedLayoutId = "confirm";
+  let layoutDrag = null;
 
   const setText = (node, value) => { node.textContent = value == null ? "" : String(value); };
 
@@ -114,6 +138,9 @@
     buildButton.disabled = running || !inspected || cheatCatalogPending;
     cancelButton.disabled = !running;
     downloadButtons.forEach((button) => { button.disabled = running; });
+    [layoutAddButton, layoutResetButton, layoutSaveButton, layoutDeleteButton,
+      layoutSelect, layoutLabel, layoutKey, layoutMode, layoutVisible]
+      .forEach((control) => { if (control) control.disabled = running; });
     updateCheatVariableControls(running);
   };
 
@@ -350,6 +377,205 @@
     cheatCatalogStatusBeforeJob = cheatCatalogStatus;
     renderCheatVariableList();
     updateCheatVariableControls();
+  };
+
+  const isDirectionalLayoutButton = (id) => ["up", "down", "left", "right"].includes(id);
+  const layoutButton = (id) => layoutButtons.find((button) => button.id === id) || null;
+
+  const updateLayoutSelectionStyles = () => {
+    layoutPreview.querySelectorAll(".layout-control").forEach((node) => {
+      node.dataset.selected = String(node.dataset.buttonId === selectedLayoutId);
+    });
+  };
+
+  const syncLayoutInspector = () => {
+    const selected = layoutButton(selectedLayoutId) || layoutButtons[0];
+    if (!selected) return;
+    selectedLayoutId = selected.id;
+    layoutSelect.value = selected.id;
+    layoutLabel.value = selected.label;
+    layoutKey.value = String(selected.keyCode);
+    layoutMode.value = selected.mode;
+    layoutVisible.checked = selected.visible !== false;
+    const bindingLocked = isDirectionalLayoutButton(selected.id);
+    layoutKey.disabled = bindingLocked || Boolean(currentJobId);
+    layoutMode.disabled = bindingLocked || Boolean(currentJobId);
+    layoutDeleteButton.disabled = bindingLocked || Boolean(currentJobId);
+    setText(layoutState, selected.visible === false ? "已隐藏" : (bindingLocked ? "方向键" : "可编辑"));
+    updateLayoutSelectionStyles();
+  };
+
+  const renderLayoutSelect = () => {
+    const fragment = document.createDocumentFragment();
+    layoutButtons.forEach((button) => {
+      const option = document.createElement("option");
+      option.value = button.id;
+      option.textContent = `${button.label} · ${button.id}${button.visible === false ? "（已隐藏）" : ""}`;
+      fragment.append(option);
+    });
+    layoutSelect.replaceChildren(fragment);
+    syncLayoutInspector();
+  };
+
+  const renderLayoutPreview = () => {
+    layoutPreview.querySelectorAll(".layout-control").forEach((node) => node.remove());
+    layoutButtons.forEach((button) => {
+      const node = document.createElement("button");
+      node.type = "button";
+      node.className = "layout-control";
+      node.dataset.buttonId = button.id;
+      node.dataset.side = isDirectionalLayoutButton(button.id) ? "left" : "right";
+      node.dataset.visible = String(button.visible !== false);
+      node.dataset.selected = String(button.id === selectedLayoutId);
+      node.textContent = button.label;
+      node.title = `${button.id} · 键码 ${button.keyCode}`;
+      node.style.left = `${button.x * 100}%`;
+      node.style.top = `${button.y * 100}%`;
+      node.style.width = `${button.width * 100}%`;
+      node.style.height = `${button.height * 100}%`;
+      node.addEventListener("pointerdown", (event) => {
+        if (currentJobId) return;
+        event.preventDefault();
+        selectedLayoutId = button.id;
+        syncLayoutInspector();
+        layoutDrag = {
+          id: button.id,
+          node,
+          startX: event.clientX,
+          startY: event.clientY,
+          originX: button.x,
+          originY: button.y,
+        };
+        node.setPointerCapture?.(event.pointerId);
+      });
+      node.addEventListener("pointermove", (event) => {
+        if (!layoutDrag || layoutDrag.node !== node) return;
+        const rect = layoutPreview.getBoundingClientRect();
+        const current = layoutButton(layoutDrag.id);
+        if (!current || !rect.width || !rect.height) return;
+        const next = {
+          ...current,
+          x: Math.max(0, Math.min(1 - current.width,
+            layoutDrag.originX + (event.clientX - layoutDrag.startX) / rect.width)),
+          y: Math.max(0, Math.min(1 - current.height,
+            layoutDrag.originY + (event.clientY - layoutDrag.startY) / rect.height)),
+        };
+        if (next.visible !== false && layoutButtons.some((other) => (
+          other.id !== next.id && other.visible !== false && layoutRectsOverlap(next, other)
+        ))) return;
+        current.x = next.x;
+        current.y = next.y;
+        node.style.left = `${current.x * 100}%`;
+        node.style.top = `${current.y * 100}%`;
+      });
+      const finishDrag = () => {
+        if (!layoutDrag || layoutDrag.node !== node) return;
+        layoutDrag = null;
+        renderLayoutSelect();
+        renderLayoutPreview();
+      };
+      node.addEventListener("pointerup", finishDrag);
+      node.addEventListener("pointercancel", finishDrag);
+      layoutPreview.append(node);
+    });
+  };
+
+  const renderLayoutEditor = () => {
+    renderLayoutSelect();
+    renderLayoutPreview();
+  };
+
+  const layoutRectsOverlap = (left, right) => (
+    left.x < right.x + right.width && right.x < left.x + left.width
+      && left.y < right.y + right.height && right.y < left.y + left.height
+  );
+
+  const layoutToControlConfig = () => {
+    const visible = layoutButtons.filter((button) => button.visible !== false);
+    for (let index = 0; index < visible.length; index += 1) {
+      for (const other of visible.slice(index + 1)) {
+        if (layoutRectsOverlap(visible[index], other)) {
+          throw new Error(`按键布局重叠：${visible[index].id} / ${other.id}`);
+        }
+      }
+    }
+    return {
+      schemaVersion: 1,
+      touch: { cancelKeyCode: 27, twoFingerWindowMs: 250, touchSlopPx: 24 },
+      overlay: { opacity: 0.38, hiddenByDefault: false },
+      buttons: layoutButtons.map((button) => ({ ...button })),
+    };
+  };
+
+  const saveLayoutButton = () => {
+    const selected = layoutButton(selectedLayoutId);
+    if (!selected) return;
+    const label = layoutLabel.value.trim();
+    const keyCode = Number.parseInt(layoutKey.value, 10);
+    if (!label || !Number.isInteger(keyCode) || keyCode < 0 || keyCode > 512) {
+      log("按键设置无效", "名称不能为空，键码必须是 0–512 的整数。", "warn");
+      return;
+    }
+    selected.label = label;
+    selected.visible = layoutVisible.checked;
+    if (!isDirectionalLayoutButton(selected.id)) {
+      selected.keyCode = keyCode;
+      selected.mode = layoutMode.value === "hold" ? "hold" : "tap";
+    }
+    renderLayoutEditor();
+    log("已保存按键布局", "构建时会将当前悬浮按键位置和右侧绑定写入 APK。", "success");
+  };
+
+  const addLayoutButton = () => {
+    const index = layoutButtons.reduce((max, button) => {
+      const match = /^custom_(\d+)$/.exec(button.id);
+      return match ? Math.max(max, Number(match[1])) : max;
+    }, 0) + 1;
+    const id = `custom_${index}`;
+    const candidates = [];
+    for (const x of [0.67, 0.83]) {
+      for (let row = 0; row < 8; row += 1) {
+        candidates.push({ x, y: 0.10 + row * 0.105, width: 0.14, height: 0.08 });
+      }
+    }
+    const slot = candidates.find((candidate) => layoutButtons.every((other) => (
+      other.visible === false || !layoutRectsOverlap(candidate, other)
+    )));
+    if (!slot) {
+      log("\u65e0\u6cd5\u6dfb\u52a0\u6309\u952e", "\u53f3\u4fa7\u6ca1\u6709\u4e0d\u91cd\u53e0\u7684\u53ef\u7528\u4f4d\u7f6e\uff0c\u8bf7\u5148\u9690\u85cf\u4e00\u4e2a\u53f3\u4fa7\u6309\u952e\u3002", "warn");
+      return;
+    }
+    layoutButtons.push({
+      id, label: "自定义", keyCode: 65, mode: "tap",
+      ...slot, visible: true,
+    });
+    selectedLayoutId = id;
+    renderLayoutEditor();
+    log("已添加右侧按键", `${id} 默认绑定键码 65，可在右侧编辑器中改名、改键或拖动位置。`, "success");
+  };
+
+  const deleteLayoutButton = () => {
+    const selected = layoutButton(selectedLayoutId);
+    if (!selected) return;
+    if (isDirectionalLayoutButton(selected.id)) {
+      log("方向键不能删除", "左侧四向移动键保留为游戏基础输入；可调整位置但不能移除。", "warn");
+      return;
+    }
+    if (selected.id.startsWith("custom_")) {
+      layoutButtons = layoutButtons.filter((button) => button.id !== selected.id);
+      selectedLayoutId = "confirm";
+    } else {
+      selected.visible = false;
+    }
+    renderLayoutEditor();
+    log("已隐藏/删除右侧按键", "如果需要恢复，可点击“恢复默认”或重新添加自定义按键。", "info");
+  };
+
+  const resetLayoutEditor = () => {
+    layoutButtons = DEFAULT_LAYOUT_BUTTONS.map((button) => ({ ...button }));
+    selectedLayoutId = "confirm";
+    renderLayoutEditor();
+    log("已恢复默认布局", "右侧确认、取消、ESC、立绘键和左侧方向键已恢复。", "info");
   };
 
   const isReportNearBottom = () => (
@@ -746,6 +972,13 @@
     if ((translate || cheatLabelsNeedTranslation) && !confirm) { log("需要翻译确认", translate ? "启用正文翻译前必须确认会向第三方发送待翻译文本。" : "高级作弊标签始终需要翻译；请确认允许在需要时向 DeepSeek 发送变量/开关名称。", "warn"); return; }
     const versionCode = Number.parseInt($("#version-code").value, 10);
     if (!Number.isSafeInteger(versionCode) || versionCode < 1) { log("版本号无效", "Version code 必须是大于 0 的整数。", "warn"); return; }
+    let control;
+    try {
+      control = layoutToControlConfig();
+    } catch (error) {
+      log("按键布局无效", error instanceof Error ? error.message : "请检查按键是否重叠。", "warn");
+      return;
+    }
     const payload = {
       source,
       app_name: $("#app-name").value.trim(),
@@ -756,6 +989,7 @@
       confirm,
       thinking_enabled: thinkingMode.value === "enabled",
       reasoning_effort: reasoningEffort.value,
+      control,
     };
     if (cheatCatalogKnown && cheatCatalogStatus === "ready") {
       payload.advancedCheatVariableIds = cheatVariableItems
@@ -815,6 +1049,14 @@
       renderCheatVariableList();
     });
     cheatVariableSearch.addEventListener("input", renderCheatVariableList);
+    layoutSelect.addEventListener("change", () => {
+      selectedLayoutId = layoutSelect.value;
+      syncLayoutInspector();
+    });
+    layoutAddButton.addEventListener("click", addLayoutButton);
+    layoutResetButton.addEventListener("click", resetLayoutEditor);
+    layoutSaveButton.addEventListener("click", saveLayoutButton);
+    layoutDeleteButton.addEventListener("click", deleteLayoutButton);
     buildButton.addEventListener("click", build);
     cancelButton.addEventListener("click", () => void cancel());
     // Inspection is tied to the exact source path.  Changing it after a
@@ -841,6 +1083,7 @@
     updateThinkingControls();
     resetTranslationChoice(false);
     resetCheatCatalog();
+    renderLayoutEditor();
     await refreshToolchain();
     void heartbeat();
     heartbeatTimer = window.setInterval(() => void heartbeat(), 5000);

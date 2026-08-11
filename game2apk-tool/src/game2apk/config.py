@@ -15,6 +15,7 @@ from .security import assert_no_secrets, atomic_write_json
 
 CONFIG_SCHEMA_VERSION = 1
 _APPLICATION_ID = re.compile(r"^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$")
+_CUSTOM_BUTTON_ID = re.compile(r"^custom_[a-z0-9][a-z0-9_-]{0,31}$")
 _BUTTON_CONTRACT = {
     "up": (38, "hold"),
     "down": (40, "hold"),
@@ -56,8 +57,8 @@ def build_config(
     # Keep these defaults monotonic with the released 1.0.3 build. Android
     # accepts an in-place update only when the package/signing identity stays
     # the same and versionCode increases.
-    version_code: int = 8,
-    version_name: str = "1.3.0",
+    version_code: int = 9,
+    version_name: str = "1.4.0",
     icon_path: str | None = None,
     control: dict[str, Any] | None = None,
     advanced_cheat_variable_ids: list[str] | None = None,
@@ -113,8 +114,8 @@ def validate_control_config(data: dict[str, Any]) -> None:
         raise ConfigurationError("overlay.opacity must be in [0, 1]")
     if not isinstance(overlay.get("hiddenByDefault"), bool):
         raise ConfigurationError("overlay.hiddenByDefault must be boolean")
-    if len(buttons) != len(_BUTTON_CONTRACT):
-        raise ConfigurationError("control.buttons must contain exactly four directions and four actions")
+    if len(buttons) < len(_BUTTON_CONTRACT) or len(buttons) > len(_BUTTON_CONTRACT) + 32:
+        raise ConfigurationError("control.buttons must contain the eight required buttons and at most 32 custom buttons")
 
     seen: set[str] = set()
     rects: list[tuple[str, float, float, float, float]] = []
@@ -125,11 +126,19 @@ def validate_control_config(data: dict[str, Any]) -> None:
         if button_id in seen:
             raise ConfigurationError(f"duplicate button id: {button_id}")
         seen.add(button_id)
-        if button_id not in _BUTTON_CONTRACT:
+        if button_id not in _BUTTON_CONTRACT and not _CUSTOM_BUTTON_ID.fullmatch(button_id):
             raise ConfigurationError(f"unsupported button id: {button_id}")
-        expected_key, expected_mode = _BUTTON_CONTRACT[button_id]
-        if button.get("keyCode") != expected_key or button.get("mode") != expected_mode:
-            raise ConfigurationError(f"button {button_id} must use keyCode {expected_key} and mode {expected_mode}")
+        key_code = button.get("keyCode")
+        if isinstance(key_code, bool) or not isinstance(key_code, int) or not 0 <= key_code <= 512:
+            raise ConfigurationError(f"button {button_id} keyCode must be between 0 and 512")
+        mode = button.get("mode")
+        if mode not in {"tap", "hold"}:
+            raise ConfigurationError(f"button {button_id} mode must be tap or hold")
+        visible = button.get("visible", True)
+        if not isinstance(visible, bool):
+            raise ConfigurationError(f"button {button_id} visible must be boolean")
+        if len(button["label"].strip()) > 40:
+            raise ConfigurationError(f"button {button_id} label is too long")
         if not all(key in button for key in ("x", "y", "width", "height")):
             raise ConfigurationError(f"button layout requires x, y, width and height: {button_id}")
         values = [button[key] for key in ("x", "y", "width", "height")]
@@ -138,9 +147,10 @@ def validate_control_config(data: dict[str, Any]) -> None:
         x, y, width, height = (float(value) for value in values)
         if width <= 0 or height <= 0 or x < 0 or y < 0 or x + width > 1 or y + height > 1:
             raise ConfigurationError(f"button layout must fit normalized screen: {button_id}")
-        rects.append((button_id, x, y, x + width, y + height))
+        if visible:
+            rects.append((button_id, x, y, x + width, y + height))
 
-    if seen != set(_BUTTON_CONTRACT):
+    if not set(_BUTTON_CONTRACT).issubset(seen):
         raise ConfigurationError("control.buttons must include up/down/left/right/confirm/cancel/esc/portrait")
     for index, (name, left, top, right, bottom) in enumerate(rects):
         for other, other_left, other_top, other_right, other_bottom in rects[index + 1:]:

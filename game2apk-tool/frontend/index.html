@@ -127,8 +127,41 @@
           </div>
         </section>
 
+        <section class="panel layout-panel glass-surface" data-section="layout" aria-labelledby="layout-title">
+          <div class="panel-heading">
+            <span class="step-index">04</span>
+            <div><h3 id="layout-title">悬浮按键布局</h3><p>先在桌面预览并调整位置；右侧按键可隐藏、改键或新增自定义按键，设置会随 APK 写入。</p></div>
+            <span id="layout-state" class="mini-state">默认布局</span>
+          </div>
+          <div class="layout-editor">
+            <div id="layout-preview" class="layout-preview" role="application" aria-label="悬浮按键布局预览">
+              <div class="layout-preview-screen"><span>MV 游戏画面预览</span><small>拖动按键调整位置</small></div>
+            </div>
+            <div class="layout-inspector">
+              <div class="layout-inspector-row">
+                <button id="layout-add-button" class="mini-button" type="button">添加右侧按键</button>
+                <button id="layout-reset-button" class="text-button" type="button">恢复默认</button>
+              </div>
+              <label class="field-label" for="layout-button-select">选择按键
+                <select id="layout-button-select" class="text-field"></select>
+              </label>
+              <div class="form-grid layout-fields">
+                <label>显示名称<input id="layout-button-label" class="text-field" maxlength="40" /></label>
+                <label>键码（0–512）<input id="layout-button-key" class="text-field" type="number" min="0" max="512" step="1" /></label>
+                <label>触发方式<select id="layout-button-mode" class="text-field"><option value="tap">点按</option><option value="hold">按住</option></select></label>
+                <label class="layout-visible-field"><span>显示</span><input id="layout-button-visible" type="checkbox" checked /></label>
+              </div>
+              <div class="layout-inspector-actions">
+                <button id="layout-save-button" class="ghost-button" type="button">保存当前按键</button>
+                <button id="layout-delete-button" class="danger-button" type="button">隐藏/删除</button>
+              </div>
+              <small class="field-hint">方向键默认保留在左侧。右侧内置确认、取消、ESC、立绘键可隐藏或改绑；新增按键使用 custom_* 编号。APK 运行时也可打开“布局”入口拖动并编辑。</small>
+            </div>
+          </div>
+        </section>
+
         <section class="panel report-panel glass-surface" data-section="report">
-          <div class="panel-heading"><span class="step-index">04</span><div><h3>检查报告 / 构建日志</h3><p>阶段、百分比和结果会实时显示；取消会请求后台安全停止当前任务。</p></div><span id="report-state" class="mini-state">等待操作</span></div>
+          <div class="panel-heading"><span class="step-index">05</span><div><h3>检查报告 / 构建日志</h3><p>阶段、百分比和结果会实时显示；取消会请求后台安全停止当前任务。</p></div><span id="report-state" class="mini-state">等待操作</span></div>
           <div id="report-log" class="report-log" role="log" aria-live="polite"><div class="empty-state"><div class="empty-icon">◌</div><p>选择项目后点击“检查项目”</p><small>检查通过后才能开始构建与签名。</small></div></div>
           <div class="progress-meta"><span id="progress-label">尚未开始</span><span id="progress-value">0%</span></div>
           <div class="progress-track" aria-label="任务进度"><span id="progress-fill"></span></div>

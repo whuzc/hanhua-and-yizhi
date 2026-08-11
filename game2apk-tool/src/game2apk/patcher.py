@@ -19,11 +19,12 @@ _CORE_SCRIPT = re.compile(
 )
 _BRIDGE_SCRIPT = re.compile(r"<script\b[^>]*\bsrc\s*=\s*[\"'](?:\./)?js/game2apk-input\.js[\"'][^>]*>\s*</script>", re.IGNORECASE)
 
-# RPG Maker MV normally selects ``.m4a`` on mobile browsers.  Encrypted MV
-# games distributed by this tool contain only ``.rpgmvo`` (the encrypted
-# form of OGG), so that default produces a ``.rpgmvm`` request and a 404 in
-# Android WebView.  Keep the patch narrowly scoped to encrypted audio: the
-# original desktop/unencrypted extension selection remains unchanged.
+# RPG Maker MV normally selects ``.m4a`` on mobile browsers.  That is not a
+# safe capability test for Android WebView: many MV projects ship OGG-only
+# audio (including unencrypted projects), while encrypted projects use the
+# ``.rpgmvo`` form of OGG.  The generated per-file map below keeps the mobile
+# request aligned with the actual staged asset, including non-ASCII names and
+# projects that mix OGG/M4A.
 _AUDIO_FILE_EXT = re.compile(
     r"AudioManager\.audioFileExt\s*=\s*function\s*\(\)\s*\{"
     r"\s*if\s*\(WebAudio\.canPlayOgg\(\)\s*&&\s*!Utils\.isMobileDevice\(\)\)\s*\{"
@@ -45,6 +46,72 @@ _AUDIO_FILE_EXT_PATCH = """AudioManager.audioFileExt = function() {
         return '.m4a';
     }
 };"""
+
+_AUDIO_MAP_MARKER = "/* game2apk per-file audio extension map */"
+_AUDIO_SUFFIX_TO_REQUEST = {
+    ".ogg": ".ogg",
+    ".rpgmvo": ".ogg",
+    ".m4a": ".m4a",
+    ".rpgmvm": ".m4a",
+    ".mp3": ".mp3",
+    ".wav": ".wav",
+    ".webm": ".webm",
+}
+_AUDIO_SUFFIX_PRIORITY = {
+    ".ogg": 0,
+    ".rpgmvo": 0,
+    ".m4a": 1,
+    ".rpgmvm": 1,
+    ".mp3": 2,
+    ".wav": 3,
+    ".webm": 4,
+}
+
+
+def _audio_extension_map(staged_www: Path) -> dict[str, str]:
+    audio_root = staged_www / "audio"
+    if not audio_root.is_dir():
+        return {}
+    selected: dict[str, tuple[int, str]] = {}
+    for path in audio_root.rglob("*"):
+        if not path.is_file():
+            continue
+        suffix = path.suffix.casefold()
+        request_suffix = _AUDIO_SUFFIX_TO_REQUEST.get(suffix)
+        if request_suffix is None:
+            continue
+        relative = path.relative_to(audio_root).as_posix()
+        stem = relative[: -len(path.suffix)]
+        candidate = (_AUDIO_SUFFIX_PRIORITY[suffix], request_suffix)
+        previous = selected.get(stem)
+        if previous is None or candidate[0] < previous[0]:
+            selected[stem] = candidate
+    return {stem: value[1] for stem, value in selected.items()}
+
+
+def _append_audio_extension_map(managers: str, extension_map: dict[str, str], newline: str) -> str:
+    if not extension_map or _AUDIO_MAP_MARKER in managers:
+        return managers
+    payload = json.dumps(extension_map, ensure_ascii=True, separators=(",", ":"))
+    script = f"""
+{_AUDIO_MAP_MARKER}
+(function (map) {{
+    var originalCreateBuffer = AudioManager.createBuffer;
+    AudioManager.createBuffer = function (folder, name) {{
+        var key = String(folder || '') + '/' + String(name || '');
+        var preferred = map[key];
+        if (!preferred) return originalCreateBuffer.apply(this, arguments);
+        var previousAudioFileExt = this.audioFileExt;
+        this.audioFileExt = function () {{ return preferred; }};
+        try {{
+            return originalCreateBuffer.apply(this, arguments);
+        }} finally {{
+            this.audioFileExt = previousAudioFileExt;
+        }}
+    }};
+}})({payload});
+"""
+    return managers + script.replace("\n", newline)
 
 BRIDGE_SOURCE = r"""/* game2apk-tool input bridge, schema-compatible with Android v1. */
 (function (global) {
@@ -477,8 +544,10 @@ def _patch_encrypted_audio_extension(staged_www: Path) -> bool:
         raise BlockedError(
             f"expected exactly one RPG Maker MV AudioManager.audioFileExt implementation, found {len(matches)}"
         )
-    patched = managers[: matches[0].start()] + _AUDIO_FILE_EXT_PATCH + managers[matches[0].end() :]
     newline = "\r\n" if "\r\n" in managers else "\n"
+    patched = managers[: matches[0].start()] + _AUDIO_FILE_EXT_PATCH + managers[matches[0].end() :]
+    extension_map = _audio_extension_map(staged_www)
+    patched = _append_audio_extension_map(patched, extension_map, newline)
     atomic_write_text(
         managers_path,
         patched.replace("\r\n", "\n").replace("\n", newline),
@@ -527,6 +596,7 @@ def patch_staged_www(staged_www: str | Path, build_config: BuildConfig | dict) -
     )
     assert_no_secrets(config_data)
     audio_extension_patched = _patch_encrypted_audio_extension(root)
+    audio_extension_map = len(_audio_extension_map(root))
     newline = "\r\n" if "\r\n" in index else "\n"
     insertion = newline + "    <script type=\"text/javascript\" src=\"js/game2apk-input.js\"></script>"
     patched = index[: core_matches[0].end()] + insertion + index[core_matches[0].end() :]
@@ -547,4 +617,5 @@ def patch_staged_www(staged_www: str | Path, build_config: BuildConfig | dict) -
         "config": str(config_path),
         "injectionCount": 1,
         "encryptedAudioExtensionPatched": int(audio_extension_patched),
+        "audioExtensionMapEntries": audio_extension_map,
     }

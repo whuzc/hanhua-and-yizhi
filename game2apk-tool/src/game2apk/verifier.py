@@ -58,17 +58,17 @@ def _parse_badging(text: str) -> dict[str, Any]:
 
 
 def _critical_assets(apk: Path) -> dict[str, Any]:
-    required = ["assets/www/index.html", "assets/www/js/rpg_core.js", "assets/www/js/game2apk-input.js"]
+    # In external-resource mode the patched bridge lives in the ZIP64 pack,
+    # not in the tiny APK fixture.  Keep the bridge required for ordinary
+    # single-APK builds, but do not report a false failure for a valid pack.
+    base_required = ["assets/www/index.html", "assets/www/js/rpg_core.js"]
+    bridge_asset = "assets/www/js/game2apk-input.js"
+    required = list(base_required) + [bridge_asset]
     try:
         with zipfile.ZipFile(apk) as archive:
             names = set(archive.namelist())
             config_candidates = ["assets/game2apk/config.json", "assets/game2apk-config.json", "assets/www/game2apk-config.json"]
-            missing = [name for name in required if name not in names]
             config_present = next((name for name in config_candidates if name in names), None)
-            if not config_present:
-                missing.append("assets/game2apk/config.json")
-            save_entries = [name for name in names if name.startswith("assets/www/save/") or name.casefold().endswith(".rpgsave")]
-            resource_entries = [name for name in names if name.startswith("assets/www/")]
             resource_config = None
             if "assets/game2apk/resource-pack.json" in names:
                 try:
@@ -76,6 +76,17 @@ def _critical_assets(apk: Path) -> dict[str, Any]:
                         archive.read("assets/game2apk/resource-pack.json").decode("utf-8")
                     )
                 except (ValueError, UnicodeDecodeError):
+                    resource_config = None
+            required = list(base_required)
+            if not isinstance(resource_config, dict):
+                required.append(bridge_asset)
+            missing = [name for name in required if name not in names]
+            if not config_present:
+                missing.append("assets/game2apk/config.json")
+            save_entries = [name for name in names if name.startswith("assets/www/save/") or name.casefold().endswith(".rpgsave")]
+            resource_entries = [name for name in names if name.startswith("assets/www/")]
+            if "assets/game2apk/resource-pack.json" in names:
+                if not isinstance(resource_config, dict):
                     missing.append("valid assets/game2apk/resource-pack.json")
             return {
                 "passed": not missing and not save_entries,
