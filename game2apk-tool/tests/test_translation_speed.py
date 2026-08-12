@@ -21,6 +21,7 @@ from game2apk.translation import (
     TranslationService,
     cheat_label_needs_translation,
     choose_model,
+    extract_safe_entries,
     filter_cheat_label_entries,
     normalize_model,
     translation_memory_key,
@@ -169,6 +170,21 @@ class _SizeLimitedBodyTransport(_ParallelTransport):
 class _BodyDocumentTransport(_SizeLimitedBodyTransport):
     def __init__(self) -> None:
         super().__init__(limit=10_000)
+
+
+class _SlowBodyDocumentTransport(_BodyDocumentTransport):
+    """Expose the in-flight request window without making the test network-bound."""
+
+    def chat(self, payload: dict, api_key: str) -> dict:
+        with self.lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(0.02)
+            return super().chat(payload, api_key)
+        finally:
+            with self.lock:
+                self.active -= 1
 
 
 class _BodyDocumentDropsOneTransport(_BodyDocumentTransport):
@@ -345,6 +361,74 @@ class TranslationSpeedTests(unittest.TestCase):
             self.assertGreater(transport.max_items, 4)
             self.assertTrue(any(payload["thinking"] == {"type": "disabled"} for payload in transport.calls))
             self.assertGreater(len(transport.calls), 1)
+
+    def test_body_requests_use_a_bounded_default_window(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            www = root / "www"
+            (www / "data").mkdir(parents=True)
+            commands = []
+            for index in range(120):
+                commands.extend(
+                    [
+                        {"code": 101, "parameters": ["", 0, 0, 2]},
+                        {"code": 401, "parameters": [f"Window body {index}"]},
+                    ]
+                )
+            (www / "data" / "Map001.json").write_text(
+                json.dumps({"events": [None, {"pages": [{"list": commands}]}]}),
+                encoding="utf-8",
+            )
+            transport = _SlowBodyDocumentTransport()
+            report = TranslationService().translate(
+                www,
+                api_key="not-a-real-key",
+                transport=transport,
+                memory_path=root / "memory.json",
+                confirmed_third_party=True,
+                force=True,
+                max_concurrency=4,
+            )
+            self.assertEqual(report.entries_applied, 120)
+            self.assertGreaterEqual(transport.max_active, 2)
+            self.assertLessEqual(transport.max_active, 2)
+
+    def test_translation_scan_excludes_backup_and_save_snapshots(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            www = root / "www"
+            for directory, value in (
+                (www / "data", "LIVE"),
+                (www / "原版备份" / "data", "BACKUP"),
+                (www / "save", "SAVE"),
+            ):
+                directory.mkdir(parents=True, exist_ok=True)
+                (directory / "Map001.json").write_text(
+                    json.dumps(
+                        {
+                            "events": [
+                                None,
+                                {
+                                    "pages": [
+                                        {
+                                            "list": [
+                                                {"code": 101, "parameters": ["", 0, 0, 2]},
+                                                {"code": 401, "parameters": [value]},
+                                            ]
+                                        }
+                                    ]
+                                },
+                            ]
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+            entries = extract_safe_entries(www)
+            sources = {entry.source_text for entry in entries}
+            self.assertIn("LIVE", sources)
+            self.assertNotIn("BACKUP", sources)
+            self.assertNotIn("SAVE", sources)
 
     def test_body_text_uses_sixty_block_documents_and_local_review_files(self) -> None:
         with TemporaryDirectory() as temporary:

@@ -69,6 +69,25 @@ BODY_DOCUMENT_MAX_ENTRIES = 60
 BODY_DOCUMENT_MAX_SOURCE_CHARS = 12_000
 BODY_DOCUMENT_SOURCE_CHARS_MIN = 1_000
 BODY_DOCUMENT_SOURCE_CHARS_MAX = 48_000
+# Translation must never walk copies of the game or mutable save data that
+# happen to live below ``www``.  Some projects keep a full ``www`` snapshot in
+# ``www/原版备份``; treating it as live content doubles the work and can make
+# the desktop process queue tens of thousands of duplicate blocks.
+TRANSLATION_EXCLUDED_DIRECTORY_NAMES = frozenset(
+    {
+        "save",
+        "saves",
+        "backup",
+        "backups",
+        "bak",
+        "original",
+        "原版备份",
+        "备份",
+    }
+)
+BODY_LARGE_PROJECT_ENTRY_THRESHOLD = 5_000
+BODY_LARGE_PROJECT_MAX_CONCURRENCY = 1
+BODY_DEFAULT_MAX_CONCURRENCY = 2
 _TRANSIENT_HTTP_STATUSES = {408, 425, 429, 500, 502, 503, 504}
 
 
@@ -413,7 +432,15 @@ def extract_safe_entries(www: str | Path) -> list[TranslationEntry]:
     for path in sorted(root.rglob("*.json"), key=lambda item: item.as_posix().casefold()):
         if not path.is_file() or path.is_symlink():
             continue
-        relative = path.relative_to(root).as_posix()
+        relative_path = path.relative_to(root)
+        if any(
+            part.casefold() in TRANSLATION_EXCLUDED_DIRECTORY_NAMES
+            or "backup" in part.casefold()
+            or "备份" in part
+            for part in relative_path.parts[:-1]
+        ):
+            continue
+        relative = relative_path.as_posix()
         try:
             data = _load_json(path)
         except TranslationError:
@@ -1850,6 +1877,7 @@ class TranslationService:
         if entry_kinds is not None:
             allowed_kinds = {str(kind) for kind in entry_kinds}
             source_entries = [entry for entry in source_entries if entry.kind in allowed_kinds]
+        source_entries_total = len(source_entries)
         strict_simplified_chinese = bool(
             allowed_kinds
             and allowed_kinds <= CHEAT_LABEL_KINDS
@@ -1863,6 +1891,23 @@ class TranslationService:
                     document_max_entries = max(1, int(document_max_entries))
                 except (TypeError, ValueError):
                     raise ConfigurationError("document_max_entries must be an integer")
+        else:
+            # Body documents are much larger than label requests.  Keep the
+            # default window deliberately small so several full dialogue
+            # completions cannot sit in memory at once.  Large projects use a
+            # single in-flight request by default; users with ample RAM may
+            # opt into a wider window through the environment variable.
+            body_default_concurrency = (
+                BODY_LARGE_PROJECT_MAX_CONCURRENCY
+                if len(source_entries) >= BODY_LARGE_PROJECT_ENTRY_THRESHOLD
+                else min(max_concurrency, BODY_DEFAULT_MAX_CONCURRENCY)
+            )
+            max_concurrency = _setting_int(
+                "GAME2APK_TRANSLATION_BODY_CONCURRENCY",
+                body_default_concurrency,
+                1,
+                MAX_TRANSLATION_CONCURRENCY,
+            )
         # Translation is opt-in, but even an explicit opt-in must never send
         # already-Chinese-only blocks for rewriting.  Mixed blocks remain
         # coherent context and have Han runs protected in _request_batch.
@@ -1899,11 +1944,12 @@ class TranslationService:
             reasoning_effort=reasoning_effort,
             skipped_recommended=recommended and not force,
             live_api_used=False,
-            source_entries_total=len(source_entries),
+            source_entries_total=source_entries_total,
             entries_skipped_chinese=skipped_chinese,
             entries_skipped_non_text=skipped_non_text,
         )
         if not entries:
+            del source_entries
             self.progress(
                 "translate",
                 1.0,
@@ -1911,6 +1957,7 @@ class TranslationService:
             )
             return report
         if recommended and not force and not strict_simplified_chinese:
+            del source_entries
             self.progress(
                 "translate",
                 1.0,
@@ -1969,7 +2016,13 @@ class TranslationService:
                 pending_groups.setdefault(key, []).append(entry)
 
         pending = [(key, group) for key, group in pending_groups.items()]
+        pending_count = len(pending)
         duplicate_count = sum(max(0, len(group) - 1) for _key, group in pending)
+        # The source list and grouping dictionary are only needed to build the
+        # queue/report.  Release them before any network work starts; this is
+        # significant for projects that contain an excluded backup snapshot.
+        del source_entries
+        del pending_groups
         if pending:
             self.progress(
                 "translate",
@@ -2018,12 +2071,13 @@ class TranslationService:
         processed_entries = 0
         try:
             if batches:
+                max_workers = min(max_concurrency, len(batches))
                 executor = ThreadPoolExecutor(
-                    max_workers=min(max_concurrency, len(batches)),
+                    max_workers=max_workers,
                     thread_name_prefix="game2apk-translate",
                 )
-                futures = [
-                    executor.submit(
+                def submit_batch(batch):
+                    future = executor.submit(
                         _request_batch_with_recovery,
                         transport,
                         api_key,
@@ -2034,16 +2088,45 @@ class TranslationService:
                         reasoning_effort,
                         self.cancel_event,
                         strict_simplified_chinese,
-                        document_source_path if strict_simplified_chinese and len(pending) >= CHEAT_LABEL_DOCUMENT_MIN_ENTRIES else None,
-                        document_result_path if strict_simplified_chinese and len(pending) >= CHEAT_LABEL_DOCUMENT_MIN_ENTRIES else None,
+                        document_source_path if strict_simplified_chinese and pending_count >= CHEAT_LABEL_DOCUMENT_MIN_ENTRIES else None,
+                        document_result_path if strict_simplified_chinese and pending_count >= CHEAT_LABEL_DOCUMENT_MIN_ENTRIES else None,
                         body_document=(
                             not strict_simplified_chinese
                             and len(batch) >= BODY_DOCUMENT_MIN_ENTRIES
                         ),
                         body_document_directory=body_document_directory,
                     )
-                    for batch in batches
-                ]
+                    futures.append(future)
+                    return future
+
+                def bounded_batch_futures():
+                    """Submit only a small window of requests at a time.
+
+                    ``ThreadPoolExecutor`` itself has an unbounded work queue;
+                    submitting every document up front retains every batch,
+                    prompt and future until the last response.  The bounded
+                    iterator keeps at most ``max_workers`` requests and
+                    refills the window only after the caller has applied the
+                    previous result.
+                    """
+
+                    waiting: list[tuple[Any, Any]] = []
+                    batch_iterator = iter(batches)
+                    while True:
+                        while len(waiting) < max_workers:
+                            try:
+                                next_batch = next(batch_iterator)
+                            except StopIteration:
+                                break
+                            waiting.append((next_batch, submit_batch(next_batch)))
+                        if not waiting:
+                            return
+                        next_batch, next_future = waiting.pop(0)
+                        try:
+                            yield next_batch, next_future
+                        finally:
+                            if next_future in futures:
+                                futures.remove(next_future)
 
                 def record_batch_failure(batch, reason: str) -> None:
                     safe_reason = redact_text(reason, (api_key,))
@@ -2084,7 +2167,7 @@ class TranslationService:
                 # Consume futures in submission order.  Requests run in
                 # parallel, but applying results in source order keeps output,
                 # reports, cache writes, and progress deterministic.
-                for batch, future in zip(batches, futures):
+                for batch, future in bounded_batch_futures():
                     batch_translations: dict[str, list[str]] | None = None
                     while True:
                         if self.cancel_event is not None and self.cancel_event.is_set():
@@ -2260,7 +2343,7 @@ class TranslationService:
         report.failure_count = translation_failure_count(report)
         report.failure_ratio = translation_failure_ratio(report)
         report.api_requests = counted_transport.requests
-        report.live_api_used = isinstance(counted_transport.base, DeepSeekTransport) and bool(pending)
+        report.live_api_used = isinstance(counted_transport.base, DeepSeekTransport) and bool(pending_count)
         failed_ids = {failure.entry_id for failure in apply_failures}
         report.modified_files = sorted(
             {

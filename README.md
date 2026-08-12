@@ -81,12 +81,13 @@ Gradle 用户目录是跨项目共用的 `GRADLE_USER_HOME`，不是某一个游
 - 只翻译非中文文本；纯中文块保留，混合文本中的中文片段也保留；
 - 连续对话行会组成一个完整消息块发送，保留上下文、行数、顺序和 MV 控制符，不会逐词翻译；
 - 默认开启 thinking，可选择关闭，或选择思考强度 `low`、`high`、`max`；强度越高通常越自然，也越慢、越耗 Token；
-- 正文默认按上下文整合为每批最多 60 个逻辑文本块或 12,000 个源字符的 TXT/TSV 请求、最多 4 路并发；小批次仍使用 JSON，并启用去重、翻译缓存、占位符保护和限流重试。
+- 正文默认按上下文整合为每批最多 60 个逻辑文本块或 12,000 个源字符的 TXT/TSV 请求；小项目最多 2 路并发，达到 5,000 个候选块的大项目默认单路并发，并使用有界请求窗口，避免一次性把全部任务放入内存。可用 `GAME2APK_TRANSLATION_BODY_CONCURRENCY=1..8` 调整；扫描会跳过 `save/backup/原版备份` 等副本目录。小批次仍使用 JSON，并启用去重、翻译缓存、占位符保护和限流重试。
 
 可用环境变量调整吞吐：
 
 ```powershell
 $env:GAME2APK_TRANSLATION_CONCURRENCY = "4"  # 1–8
+$env:GAME2APK_TRANSLATION_BODY_CONCURRENCY = "1" # 大型项目建议 1
 $env:GAME2APK_TRANSLATION_BATCH_SIZE = "60" # 1–100，正文仍最多 60 块
 $env:GAME2APK_TRANSLATION_DOCUMENT_CHARS = "12000" # 1000–48000，建议保持默认
 ```

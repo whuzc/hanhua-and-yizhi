@@ -1,6 +1,6 @@
 # game2apk-tool
 
-当前发布版本：`v1.5.4`。本版修复大型 MV 项目高级作弊预检重复扫描导致的长时间无响应/连接中断：复用已完成的检查结果，只读取运行时可见的 System.json 标签，并延长兼容 `--web` 的心跳宽限。
+当前发布版本：`v1.5.5`。本版修复大型 MV 项目正文翻译内存占用：扫描会排除 `save/backup/原版备份` 副本，大型正文默认单路请求并采用有界队列，避免把整批请求一次性堆进内存。高级作弊预检复用已完成的检查结果，只读取运行时可见的 System.json 标签，并延长兼容 `--web` 的心跳宽限。
 
 布局编辑、超大项目外部资源包和 Android 音频修复的独立说明见 [docs/layout-editor.md](docs/layout-editor.md)。
 
@@ -77,7 +77,7 @@ portable 不得包含原游戏、存档、APK、AAB、keystore、DPAPI 文件或
 - **工具链自动发现**：启动时优先读取已存在的 `ANDROID_SDK_ROOT`、`ANDROID_HOME`、`JAVA_HOME`、`PATH`、Android Studio 默认目录和用户配置；如果本机已有 Android 工具，会直接调用，不重复安装。缺少组件时仅在用户点击下载并确认后访问官方 HTTPS 地址，安装目录由用户选择。Command-line Tools 下载后仍需用户用 `sdkmanager` 或 Android Studio 安装项目所需的 platform/build-tools/platform-tools；工具不会静默接受许可证。
 - **可选 DeepSeek 翻译**：默认不联网、不翻译。勾选强制翻译并明确确认第三方传输后，使用环境变量名、stdin 或隐藏 prompt 提供 Key；Key 不出现在 argv、日志、报告、APK 或 portable。建议先备份并逐段审阅机器翻译结果。
 
-翻译默认使用官方模型 `deepseek-v4-flash`（输入 `v4flash` / `v4-flash` 会自动规范化），默认开启 thinking 并使用 `high` 强度；界面可切换关闭 thinking，或选择 `low / high / max`，以在自然度和速度之间取舍。正文默认按最多 60 个逻辑文本块或约 12,000 个源字符整合为一次 TXT/TSV 请求、最多 4 路并发，并启用相同文本去重、翻译缓存和限流重试。RPG Maker MV 的连续对话行会作为一个完整消息块，相邻事件/记录以明确上下文边界分组，按上下文翻译并保留 ID、段数与顺序，不会按单词逐个翻译。可用 `GAME2APK_TRANSLATION_CONCURRENCY`（1–8）、`GAME2APK_TRANSLATION_BATCH_SIZE`（1–100，正文仍最多 60）和 `GAME2APK_TRANSLATION_DOCUMENT_CHARS`（1,000–48,000，建议保持默认 12,000）按账号限流情况调整；高级作弊标签另有 24 条/2 路并发上限，并在响应过大时自动拆分恢复。完整策略与取舍见 [docs/translation-performance.md](../docs/translation-performance.md)。
+翻译默认使用官方模型 `deepseek-v4-flash`（输入 `v4flash` / `v4-flash` 会自动规范化），默认开启 thinking 并使用 `high` 强度；界面可切换关闭 thinking，或选择 `low / high / max`，以在自然度和速度之间取舍。正文默认按最多 60 个逻辑文本块或约 12,000 个源字符整合为一次 TXT/TSV 请求；小项目最多 2 路并发，候选块达到 5,000 个的大项目默认单路并发，并采用有界请求窗口。可用 `GAME2APK_TRANSLATION_BODY_CONCURRENCY`（1–8）显式调整正文并发，内存紧张时建议设为 `1`；`GAME2APK_TRANSLATION_BATCH_SIZE`（1–100，正文仍最多 60）和 `GAME2APK_TRANSLATION_DOCUMENT_CHARS`（1,000–48,000，建议保持默认 12,000）也可按账号限流情况调整。扫描会跳过 `save/backup/原版备份/备份` 目录，避免把原版副本再次翻译。高级作弊标签另有 24 条/2 路并发上限，并在响应过大时自动拆分恢复。完整策略与取舍见 [docs/translation-performance.md](../docs/translation-performance.md)。
 - **签名与静态验收**：沿用固定 `applicationId=com.game2apk.xianyaoshengcanver22`、`versionCode=8`、`versionName=1.3.0` 的升级身份，自动完成 zipalign/apksigner/manifest/资源清单等静态检查；没有连接手机时不会宣称已完成实机验证。
 - **手机输入契约**：悬浮层保留确认、取消、ESC、立绘和四向方向键；方向键按住持续、抬起立即释放。单指点击游戏区保持 MV 原触摸语义（选项、地图目的地、dash、NPC/事件互动），单指长按加速文本；双指轻点发送一次返回/取消，三指和多余触点被忽略。悬浮层可以隐藏，避免遮挡原游戏。
 - **内置作弊器**：右上角入口可打开金币 `999999999`、角色字段编辑（等级、经验、HP/MP、基础参数及游戏存在的淫欲等扩展字段）、免费物品商店、无敌、回想房间传送、战斗强制胜利/失败。高级菜单在游戏运行时读取 `$dataSystem.variables`、`switches` 和 `$dataMapInfos`，按游戏原名自动生成变量/开关/回想候选并用关键词标注欲望、感度、成长、关系等类别；没有命名的变量不会被全部暴露，而是保留通用白名单回退。语义识别是候选提示，不会猜测未命名插件内部字段，也不保证不同游戏的同名变量含义相同。免费商店不做购买限额保护，仅提示按需购买；无敌开启时保存当前 HP/攻击/防御快照，关闭时按角色当前正常值恢复而不是覆盖升级后新值。作弊可能破坏事件、数值或存档，请复制存档后按需使用。

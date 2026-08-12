@@ -13,11 +13,14 @@ also receives a bounded `max_tokens` value sized from the input text; high/max
 reserve a larger floor so reasoning tokens cannot consume the JSON output
 budget on longer passages.
 
-The default scheduler sends up to 60 unique logical blocks per request and runs
-up to 4 requests concurrently. Normal body text uses a compact line-oriented
-TXT/TSV protocol once a batch contains at least 8 blocks. A request is capped
-at the smaller of the configured block count, 60 blocks, or roughly 12,000
-source characters. These are deliberately conservative operational limits:
+The default scheduler sends up to 60 unique logical blocks per request. Normal
+body text uses a compact line-oriented TXT/TSV protocol once a batch contains
+at least 8 blocks. A request is capped at the smaller of the configured block
+count, 60 blocks, or roughly 12,000 source characters. Small projects use at
+most two in-flight body requests; projects with at least 5,000 eligible blocks
+default to a single in-flight request. The scheduler submits only a bounded
+window instead of queueing every document in the executor. These are
+deliberately conservative operational limits:
 even when a model advertises a much larger context/output window, reasoning,
 target-language expansion, exact row recovery, and useful retry granularity
 make filling that window a poor reliability trade-off.
@@ -65,6 +68,7 @@ quality ranking for every sentence; review the generated diff before shipping.
 ```powershell
 # Conservative values for a rate-limited account
 $env:GAME2APK_TRANSLATION_CONCURRENCY = "2"  # 1..8
+$env:GAME2APK_TRANSLATION_BODY_CONCURRENCY = "1" # 1..8; large projects default to 1
 $env:GAME2APK_TRANSLATION_BATCH_SIZE = "24"   # 1..100; body requests are capped at 60
 $env:GAME2APK_TRANSLATION_DOCUMENT_CHARS = "12000" # 1000..48000; 12000 recommended
 ```
@@ -76,6 +80,12 @@ backoff and stops queued requests; an in-flight HTTP request finishes or times
 out before its worker exits. API keys are passed only in memory, are never
 included in prompts, logs, reports, cache files, or command-line arguments,
 and third-party translation still requires an explicit confirmation.
+
+The scanner ignores JSON below `save`, `saves`, `backup`, `backups`, `bak`,
+`original`, `原版备份`, and `备份` directories. This is intentional: many MV
+projects keep a full original `www` snapshot beside the live data, and
+translating that snapshot would multiply API calls and memory use without
+changing the running game.
 
 If a TXT completion ends because of output length, the same document is retried
 once with thinking disabled and then split recursively, preferably at a context
