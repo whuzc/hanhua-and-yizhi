@@ -31,7 +31,7 @@ from urllib.parse import urlparse
 from .cheat_catalog import advanced_cheat_catalog, normalize_advanced_cheat_variable_ids
 from .config import build_config, default_control_config
 from .errors import CancelledError, ConfigurationError, Game2ApkError
-from .models import BuildConfig
+from .models import BuildConfig, InspectionReport
 from .pipeline import PipelineService
 from .security import now_utc, redact_text
 from .toolchain import COMPONENTS, discover_configured, download_component, load_config, missing_components, save_config
@@ -49,7 +49,11 @@ from .translation import (
 
 MAX_REQUEST_BYTES = 128 * 1024
 MAX_JOB_MESSAGE_CHARS = 1200
-DEFAULT_IDLE_TIMEOUT_SECONDS = 30.0
+# Keep a generous fallback for the legacy ``--web`` entry point.  The
+# dedicated UI launcher still supplies a parent PID and therefore cleans up
+# immediately when it exits; the longer heartbeat grace period prevents a
+# slow/hidden browser tab from making an otherwise healthy backend vanish.
+DEFAULT_IDLE_TIMEOUT_SECONDS = 300.0
 SESSION_COOKIE_NAME = "game2apk_session"
 REQUEST_HEADER = "X-Game2Apk-Request"
 
@@ -427,8 +431,41 @@ class JobManager:
         self._toolchain_discoverer = toolchain_discoverer
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="game2apk-backend")
         self._jobs: dict[str, Job] = {}
+        # Keep the last successful inspection available to the follow-up
+        # cheat-label preview.  Large MV projects can contain hundreds of
+        # maps; repeating the full inspection immediately after the user has
+        # just completed it needlessly re-parses tens of megabytes and can
+        # make the loopback server appear to disappear on low-memory systems.
+        self._inspection_cache: dict[tuple[str, int, int], InspectionReport] = {}
         self._lock = threading.Lock()
         self._closed = False
+
+    @staticmethod
+    def _inspection_signature(source: Path) -> tuple[str, int, int] | None:
+        """Return a cheap source signature suitable for this session cache."""
+
+        source = source.resolve(strict=True)
+        www = source if source.name.casefold() == "www" else source / "www"
+        system_path = (www / "data" / "System.json").resolve(strict=False)
+        try:
+            stat = system_path.stat()
+        except OSError:
+            return None
+        return str(source), int(stat.st_size), int(stat.st_mtime_ns)
+
+    def _remember_inspection(self, source: Path, report: InspectionReport) -> None:
+        signature = self._inspection_signature(source)
+        if signature is None:
+            return
+        with self._lock:
+            self._inspection_cache[signature] = report
+
+    def _cached_inspection(self, source: Path) -> InspectionReport | None:
+        signature = self._inspection_signature(source)
+        if signature is None:
+            return None
+        with self._lock:
+            return self._inspection_cache.get(signature)
 
     def _new_job(self, kind: str) -> Job:
         with self._lock:
@@ -469,6 +506,7 @@ class JobManager:
                 report = service.inspect(source_path)
                 if job.cancel_event.is_set():
                     raise CancelledError("inspection cancelled")
+                self._remember_inspection(source_path, report)
                 language = _translation_profile_for_report(report, job.update_progress)
                 job.set_result(
                     {
@@ -506,7 +544,12 @@ class JobManager:
                     progress=progress,
                     cancel_event=job.cancel_event,
                 )
-                report = service.inspect(request.source)
+                report = self._cached_inspection(request.source)
+                if report is not None:
+                    progress("inspect", 1.0, "reusing completed inspection")
+                else:
+                    report = service.inspect(request.source)
+                    self._remember_inspection(request.source, report)
                 if report.blocked:
                     raise Game2ApkError("RPG Maker MV inspection did not pass; inspect report is available")
                 needs_translation = service.cheat_labels_need_translation_at(report.www_root)

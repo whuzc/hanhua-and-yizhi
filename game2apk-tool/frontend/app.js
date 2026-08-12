@@ -926,7 +926,12 @@
     } catch (error) {
       if (isCheatCatalogJob(kind)) restoreCheatCatalogAfterJob("无法提交翻译任务；已保留现有变量编号与名称。");
       setTaskButtons(false);
-      log("无法提交任务", error instanceof Error ? error.message : "请检查输入后重试。", "error");
+      const rawMessage = error instanceof Error ? error.message : "请检查输入后重试。";
+      const disconnected = /failed to fetch|networkerror|load failed/i.test(rawMessage);
+      const detail = disconnected
+        ? `${rawMessage}；本地后台连接已断开，请保持 game2apk-ui.exe 运行并重新打开它，不要使用旧浏览器页面。`
+        : rawMessage;
+      log("无法提交任务", detail, "error");
     }
   };
 
@@ -1091,9 +1096,16 @@
     resetTranslationChoice(false);
     resetCheatCatalog();
     renderLayoutEditor();
-    await refreshToolchain();
+    // Start the heartbeat before the initial toolchain probe.  On a slow
+    // portable disk the first health request can take long enough that the
+    // compatibility ``--web`` backend would otherwise enter its idle grace
+    // period before the page has sent its first heartbeat.
     void heartbeat();
     heartbeatTimer = window.setInterval(() => void heartbeat(), 5000);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) void heartbeat();
+    });
+    await refreshToolchain();
   };
 
   window.addEventListener("pagehide", () => {

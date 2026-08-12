@@ -59,6 +59,13 @@ class _PipelineFixture:
         self.progress("inspect", 0.5, "checking fixture")
         return _report(Path(source))
 
+    def cheat_labels_need_translation_at(self, _www_root):
+        return False
+
+    def preview_cheat_catalog(self, _report, **_kwargs):
+        type(self).calls.append("preview_cheat_catalog")
+        return {"status": "ready", "items": []}, None
+
     def stage(self, inspection):
         type(self).calls.append("stage")
         self.progress("stage", 0.5, "staging fixture")
@@ -119,6 +126,11 @@ class BackendServiceTests(unittest.TestCase):
         (self.root / "frontend" / "index.html").write_text("<!doctype html><title>fixture</title>", encoding="utf-8")
         self.source = self.root / "source"
         self.source.mkdir()
+        (self.source / "www" / "data").mkdir(parents=True)
+        (self.source / "www" / "data" / "System.json").write_text(
+            '{"locale":"zh_CN","variables":["","Gold"],"switches":[""]}',
+            encoding="utf-8",
+        )
         self.template = self.root / "template"
         self.template.mkdir()
         _PipelineFixture.calls = []
@@ -220,6 +232,22 @@ class BackendServiceTests(unittest.TestCase):
         self.assertNotIn(secret_api, public)
         self.assertNotIn(secret_password, public)
         self.assertEqual(Path(built["result"]["distApkPath"]), Path("C:/dist/fixture-signed.apk"))
+
+    def test_cheat_catalog_reuses_the_completed_inspection(self) -> None:
+        status, payload = self._post("/api/inspect", {"source": str(self.source)})
+        self.assertEqual(status, 202)
+        inspected = self._job_until_terminal(str(payload["job"]["id"]))
+        self.assertEqual(inspected["status"], "completed")
+
+        status, payload = self._post(
+            "/api/cheat-catalog",
+            {"source": str(self.source), "confirm": True},
+        )
+        self.assertEqual(status, 202)
+        preview = self._job_until_terminal(str(payload["job"]["id"]))
+        self.assertEqual(preview["status"], "completed")
+        self.assertEqual(_PipelineFixture.calls.count("inspect"), 1)
+        self.assertIn("preview_cheat_catalog", _PipelineFixture.calls)
 
     def test_cancelled_job_reports_cancelled_state(self) -> None:
         self.server.close_jobs()

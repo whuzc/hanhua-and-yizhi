@@ -1,5 +1,7 @@
 # game2apk-tool
 
+当前发布版本：`v1.5.4`。本版修复大型 MV 项目高级作弊预检重复扫描导致的长时间无响应/连接中断：复用已完成的检查结果，只读取运行时可见的 System.json 标签，并延长兼容 `--web` 的心跳宽限。
+
 布局编辑、超大项目外部资源包和 Android 音频修复的独立说明见 [docs/layout-editor.md](docs/layout-editor.md)。
 
 构建空间和中间副本的自动清理规则见 [docs/workspace-cleanup.md](docs/workspace-cleanup.md)。
@@ -110,7 +112,7 @@ portable 工具不是 Android 应用，不需要安装器或卸载。先关闭 `
 
 构建失败后再次点击“构建并验证”会尝试断点续做：相同源目录、模板、应用配置和翻译选项会复用已经完成的暂存、补丁和翻译检查点，并跳过这些步骤；任何输入变化或检查点校验失败都会新建 run。Gradle 的单个任务本身不提供文件级断点，但共享 `GRADLE_USER_HOME` 会保留已下载的 wrapper、插件和依赖。
 
-每次启动都只监听 `127.0.0.1` 的随机端口，HTML 页面由同一个本机后台提供；写操作要求 HttpOnly 同源会话 Cookie 与 `X-Game2Apk-Request` 请求头。DeepSeek Key 与签名密码仅存在于当前构建请求内，后台不会写入日志、设置文件、APK 或 portable。页面每 5 秒发送心跳；关闭标签页后后台约 30 秒内回收，关闭启动器时也会由父进程监视器回收。浏览器前端响应系统的 `prefers-reduced-motion`；旧 Tk 兼容界面才使用 `GAME2APK_REDUCE_MOTION=1`。
+每次启动都只监听 `127.0.0.1` 的随机端口，HTML 页面由同一个本机后台提供；写操作要求 HttpOnly 同源会话 Cookie 与 `X-Game2Apk-Request` 请求头。DeepSeek Key 与签名密码仅存在于当前构建请求内，后台不会写入日志、设置文件、APK 或 portable。页面每 5 秒发送心跳；兼容 `--web` 入口在心跳中断后约 5 分钟才回收，避免慢磁盘或后台标签页让任务中途断线；专用 `game2apk-ui.exe` 关闭时仍由父进程监视器立即回收。浏览器前端响应系统的 `prefers-reduced-motion`；旧 Tk 兼容界面才使用 `GAME2APK_REDUCE_MOTION=1`。
 
 兼容入口：
 

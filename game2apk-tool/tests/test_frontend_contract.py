@@ -211,6 +211,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('item.translatedLabel', js)
         self.assertIn('item.sourceLabel', js)
         self.assertIn('kind !== "variable"', js)
+        self.assertIn('本地后台连接已断开', js)
+        self.assertIn('document.addEventListener("visibilitychange"', js)
         self.assertIn('min-height: 44px', css)
         self.assertIn('@media (hover: hover) and (pointer: fine)', css)
         self.assertIn('@media (prefers-reduced-motion: reduce)', css)

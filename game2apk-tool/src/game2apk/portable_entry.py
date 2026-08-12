@@ -18,7 +18,7 @@ def _backend_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(add_help=True, prog="game2apk-tool.exe --backend")
     parser.add_argument("--port", type=int, default=0, help="loopback port; 0 selects a random available port")
     parser.add_argument("--parent-pid", type=int, default=None, help="stop when the native frontend parent exits")
-    parser.add_argument("--idle-timeout", type=float, default=30.0, help="seconds after frontend heartbeat stops; 0 disables idle shutdown")
+    parser.add_argument("--idle-timeout", type=float, default=300.0, help="seconds after frontend heartbeat stops; 0 disables idle shutdown")
     return parser
 
 

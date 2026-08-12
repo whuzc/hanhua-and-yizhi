@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .builder import BuildService
-from .cheat_catalog import advanced_cheat_catalog
+from .cheat_catalog import (
+    advanced_cheat_catalog,
+    discover_advanced_cheat_switches,
+    discover_advanced_cheat_variables,
+)
 from .config import build_config, default_control_config
 from .errors import BlockedError
 from .inspector import inspect_game
@@ -29,7 +33,6 @@ from .translation import (
     TranslationService,
     cheat_label_needs_translation,
     extract_safe_entries,
-    filter_cheat_label_entries,
     filter_non_chinese_entries,
     recommend_skip_translation,
     translation_failure_count,
@@ -205,16 +208,20 @@ class PipelineService:
     def cheat_labels_need_translation_at(self, www_root: str | Path) -> bool:
         """Return whether a source/staged ``www`` needs the label pass."""
 
-        labels = [
-            entry
-            for entry in extract_safe_entries(www_root)
-            if entry.kind in {"system-variable", "system-switch"}
-        ]
         # The injected menu exposes a bounded, per-kind subset of System.json.
-        # Use the same selector as the strict translation pass; the generic
-        # Han-ratio heuristic incorrectly treats Japanese Kanji-only labels as
-        # already-Chinese and would skip the mandatory pass entirely.
-        visible = filter_cheat_label_entries(labels)
+        # Do not call extract_safe_entries() here: for a large MV project that
+        # would parse every map/database JSON a second time merely to decide
+        # whether the small cheat-label preview is needed.  The strict
+        # translation pass itself still uses the normal extractor on its
+        # disposable System.json-only directory.
+        visible_labels = [
+            label
+            for _index, label in discover_advanced_cheat_variables(www_root)
+        ]
+        visible_labels.extend(
+            label
+            for _index, label in discover_advanced_cheat_switches(www_root)
+        )
         locale_is_japanese = False
         system_path = Path(www_root) / "data" / "System.json"
         try:
@@ -222,7 +229,7 @@ class PipelineService:
             locale_is_japanese = str(system_data.get("locale", "")).casefold().replace("_", "-").startswith("ja")
         except (OSError, ValueError, TypeError):
             pass
-        if locale_is_japanese and visible:
+        if locale_is_japanese and visible_labels:
             # Japanese Kanji-only labels can be byte-for-byte identical to
             # Chinese after normalization, so locale is the only reliable
             # signal for this edge case.  The strict validator still permits
@@ -230,8 +237,7 @@ class PipelineService:
             return True
         return any(
             cheat_label_needs_translation(segment)
-            for entry in visible
-            for segment in entry.segments
+            for segment in visible_labels
         )
 
     def translate_cheat_labels(self, stage: StageManifest, **kwargs: Any) -> TranslationReport:

@@ -17,6 +17,7 @@ from .security import require_within
 
 
 ADVANCED_CHEAT_VARIABLE_LIMIT = 256
+ADVANCED_CHEAT_SWITCH_LIMIT = 128
 _VARIABLE_ID = re.compile(r"^variable:([1-9][0-9]*)$")
 
 
@@ -81,6 +82,30 @@ def discover_advanced_cheat_variables(www_root: str | Path) -> list[tuple[int, s
             continue
         discovered.append((index, label))
         if len(discovered) >= ADVANCED_CHEAT_VARIABLE_LIMIT:
+            break
+    return discovered
+
+
+def discover_advanced_cheat_switches(www_root: str | Path) -> list[tuple[int, str]]:
+    """Return the first named switches exposed by the runtime cheat menu.
+
+    The injected menu only needs a bounded preview of switches.  Reading this
+    small array directly avoids walking every map/database JSON file just to
+    decide whether the label preflight is necessary.
+    """
+
+    values = _system_data(www_root).get("switches")
+    if not isinstance(values, list):
+        return []
+    discovered: list[tuple[int, str]] = []
+    for index, raw_label in enumerate(values):
+        if index <= 0 or not isinstance(raw_label, str):
+            continue
+        label = raw_label.strip()
+        if not label:
+            continue
+        discovered.append((index, label))
+        if len(discovered) >= ADVANCED_CHEAT_SWITCH_LIMIT:
             break
     return discovered
 
