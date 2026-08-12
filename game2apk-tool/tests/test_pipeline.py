@@ -462,6 +462,72 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue((self.root / ".state" / "cheat-label-translation-memory.json").is_file())
         self.assertFalse((self.root / ".state" / "translation-memory.json").exists())
 
+    def test_body_pass_does_not_invalidate_cheat_preview_cache(self) -> None:
+        """A previewed label is applied from cache during build, without a second API call."""
+
+        from types import SimpleNamespace
+
+        system_path = self.www / "data" / "System.json"
+        system = json.loads(system_path.read_text(encoding="utf-8"))
+        system.update(
+            {
+                "locale": "ja_JP",
+                "variables": ["", "\u767a\u60c5\u4e2d"],
+                "switches": [""],
+            }
+        )
+        system_path.write_text(json.dumps(system, ensure_ascii=False), encoding="utf-8")
+
+        def responder(payload):
+            items = json.loads(payload["messages"][-1]["content"].split("INPUT=", 1)[1])
+            translated = [
+                {"id": item["id"], "segments": ["\u53d1\u60c5\u4e2d"]}
+                for item in items
+            ]
+            return {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": json.dumps({"translations": translated}, ensure_ascii=False)},
+                    }
+                ]
+            }
+
+        service = PipelineService(self.root)
+        inspection = inspect_game(self.game)
+        _catalog, preview = service.preview_cheat_catalog(
+            inspection,
+            model="deepseek-v4-flash",
+            api_key="fake",
+            transport=FakeTransport(responder=responder),
+            confirmed_third_party=True,
+            thinking_enabled=False,
+        )
+        self.assertIsNotNone(preview)
+        # The ordinary full-text pass runs after the UI preview in a real
+        # build.  It must leave System.json labels untouched so their strict
+        # cache keys still match the preview result.
+        stage = SimpleNamespace(staged_www=str(self.www), manifest_path=None)
+        service.translate(
+            stage,
+            api_key="fake",
+            transport=FakeTransport(),
+            confirmed_third_party=True,
+            force=True,
+            thinking_enabled=False,
+        )
+        final_transport = FakeTransport(responder=lambda _payload: self.fail("preview cache should avoid API chat"))
+        final = service.translate_cheat_labels(
+            stage,
+            api_key="fake",
+            transport=final_transport,
+            confirmed_third_party=True,
+            thinking_enabled=False,
+        )
+        self.assertEqual(final.api_requests, 0)
+        self.assertGreaterEqual(final.entries_cached, 1)
+        self.assertEqual(final_transport.calls, [])
+
     def test_safe_extraction_and_placeholder_validation(self) -> None:
         entries = extract_safe_entries(self.www)
         kinds = {entry.kind for entry in entries}

@@ -3,6 +3,7 @@
     <application
         android:allowBackup="false"
         android:hardwareAccelerated="true"
+        android:largeHeap="true"
         android:icon="@drawable/game2apk_launcher"
         android:label="@string/app_name"
         android:roundIcon="@drawable/game2apk_launcher"

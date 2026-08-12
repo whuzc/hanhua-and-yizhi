@@ -263,6 +263,12 @@ class PipelineService:
             **kwargs,
         )
         self._record_translation_modifications(stage, report)
+        if report.api_requests == 0 and report.entries_cached > 0:
+            self.progress(
+                "translate",
+                1.0,
+                "reused advanced cheat-label preview cache; wrote labels to build copy",
+            )
         self._report_translation_failures(report, "作弊标签")
         return report
 

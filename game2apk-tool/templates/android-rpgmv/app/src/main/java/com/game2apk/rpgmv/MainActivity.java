@@ -11,7 +11,11 @@ import android.util.Log;
 import android.view.View;
 import android.content.pm.ActivityInfo;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceResponse;
+import android.webkit.WebChromeClient;
+import android.webkit.ConsoleMessage;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -152,6 +156,12 @@ public final class MainActivity extends Activity {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         }
         target.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            // Large MV projects can keep tens of thousands of encrypted assets
+            // addressable. Ask Android to keep the renderer alive under
+            // ordinary memory pressure; a renderer crash is handled below.
+            target.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true);
+        }
         target.setOverScrollMode(View.OVER_SCROLL_NEVER);
         target.setBackgroundColor(Color.BLACK);
 
@@ -163,6 +173,15 @@ public final class MainActivity extends Activity {
         }
         WebViewAssetLoader assetLoader = assetBuilder.build();
         target.setWebViewClient(new OfflineAssetWebViewClient(assetLoader));
+        target.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onConsoleMessage(ConsoleMessage message) {
+                Log.i(TAG, "console " + message.messageLevel() + " "
+                        + message.sourceId() + ":" + message.lineNumber() + " "
+                        + message.message());
+                return true;
+            }
+        });
     }
 
     /**
@@ -391,6 +410,32 @@ public final class MainActivity extends Activity {
                 // is safe when the context is already running.
                 resumeWebAudio();
             }
+        }
+
+        @Override
+        public void onReceivedError(WebView view, WebResourceRequest request,
+                                    WebResourceError error) {
+            super.onReceivedError(view, request, error);
+            Log.e(TAG, "resource error main=" + request.isForMainFrame()
+                    + " url=" + request.getUrl() + " code=" + error.getErrorCode()
+                    + " description=" + error.getDescription());
+        }
+
+        @Override
+        public void onReceivedHttpError(WebView view, WebResourceRequest request,
+                                        WebResourceResponse response) {
+            super.onReceivedHttpError(view, request, response);
+            Log.e(TAG, "HTTP resource error main=" + request.isForMainFrame()
+                    + " url=" + request.getUrl() + " status=" + response.getStatusCode());
+        }
+
+        @Override
+        public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+            Log.e(TAG, "WebView renderer gone; didCrash=" + detail.didCrash());
+            showStartupError("游戏渲染进程已停止，通常由手机内存不足或超大资源包触发。\n"
+                    + "请关闭后台应用后重试；若仍失败，请提供 logcat 中 Game2ApkRuntime 日志。\n\n"
+                    + "The WebView renderer stopped (often memory pressure on very large games).");
+            return true;
         }
 
         @Override

@@ -306,6 +306,52 @@ class TranslationSpeedTests(unittest.TestCase):
             values = [command["parameters"][0] for command in data["events"][1]["pages"][0]["list"] if command["code"] == 401]
             self.assertEqual(values, ["One [zh]", "Two [zh]", "Repeat [zh]", "Repeat [zh]", "Five [zh]", "Six [zh]"])
 
+    def test_body_translation_leaves_dynamic_cheat_labels_for_dedicated_pass(self) -> None:
+        """The optional game-text pass must not invalidate preview label cache keys."""
+
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            www = self._www(root)
+            (www / "data" / "System.json").write_text(
+                json.dumps(
+                    {
+                        "gameTitle": "English Demo",
+                        "locale": "en_US",
+                        "terms": {},
+                        "variables": ["", "Sensitivity"],
+                        "switches": ["", "Gallery unlocked"],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            entries = extract_safe_entries(www)
+            cheat_ids = {
+                entry.entry_id
+                for entry in entries
+                if entry.kind in {"system-variable", "system-switch"}
+            }
+            self.assertEqual(len(cheat_ids), 2)
+
+            report = TranslationService().translate(
+                www,
+                api_key="not-a-real-key",
+                transport=_ParallelTransport(),
+                memory_path=root / "memory.json",
+                confirmed_third_party=True,
+                force=True,
+                batch_size=100,
+                max_concurrency=1,
+                thinking_enabled=False,
+            )
+
+            translated_ids = {diff["id"] for diff in report.diffs}
+            self.assertTrue(translated_ids)
+            self.assertTrue(cheat_ids.isdisjoint(translated_ids))
+            system = json.loads((www / "data" / "System.json").read_text(encoding="utf-8"))
+            self.assertEqual(system["variables"][1], "Sensitivity")
+            self.assertEqual(system["switches"][1], "Gallery unlocked")
+
     def test_disabled_thinking_omits_reasoning_effort(self) -> None:
         with TemporaryDirectory() as temporary:
             www = self._www(Path(temporary))

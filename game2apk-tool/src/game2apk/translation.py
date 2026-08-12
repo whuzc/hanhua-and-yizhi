@@ -1877,6 +1877,18 @@ class TranslationService:
         if entry_kinds is not None:
             allowed_kinds = {str(kind) for kind in entry_kinds}
             source_entries = [entry for entry in source_entries if entry.kind in allowed_kinds]
+        else:
+            # Dynamic cheat labels have their own strict Simplified-Chinese
+            # pass and cache namespace.  Keep the optional whole-game/body
+            # pass from rewriting those labels first: doing so changes the
+            # source text used by the strict cache key, which makes a label
+            # translated in the advanced-cheat preview look new during the
+            # final build and can trigger a second provider request.  The
+            # dedicated ``entry_kinds`` call below applies the cached preview
+            # result to the staged System.json instead.
+            source_entries = [
+                entry for entry in source_entries if entry.kind not in CHEAT_LABEL_KINDS
+            ]
         source_entries_total = len(source_entries)
         strict_simplified_chinese = bool(
             allowed_kinds
