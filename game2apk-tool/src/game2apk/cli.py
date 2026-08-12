@@ -262,6 +262,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "build":
             stage_data = json.loads(Path(args.stage_manifest).read_text(encoding="utf-8"))
             result = service.build(args.template, stage_manifest_from_dict(stage_data), _config(args))
+            if result.return_code != 0 or not result.apk_path:
+                try:
+                    service.cleanup_failed_build(result)
+                except (BlockedError, OSError, ValueError) as cleanup_error:
+                    print(redact_text(f"cleanup warning: {cleanup_error}"), file=sys.stderr)
             _emit(result)
             return 0 if result.return_code == 0 and result.apk_path else 2
         elif args.command == "sign":
@@ -343,6 +348,10 @@ def main(argv: list[str] | None = None) -> int:
                 service.mark_prepared(stage)
             result = service.build(args.template, stage, config, api_key=api_key)
             if result.return_code != 0 or not result.apk_path:
+                try:
+                    service.cleanup_failed_build(result)
+                except (BlockedError, OSError, ValueError) as cleanup_error:
+                    print(redact_text(f"cleanup warning: {cleanup_error}"), file=sys.stderr)
                 _emit(result)
                 return 2
             password = _read_cli_secret(args, "sign_password", "Signing password")

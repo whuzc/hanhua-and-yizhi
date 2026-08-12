@@ -21,7 +21,7 @@ from game2apk.inspector import inspect_game
 from game2apk.models import BuildConfig, ToolchainInfo, TranslationFailure, TranslationReport
 from game2apk.patcher import patch_staged_www
 from game2apk.pipeline import PipelineService
-from game2apk.security import create_work_marker, redact_text, safe_remove_workdir
+from game2apk.security import create_work_marker, redact_text, safe_cleanup_run_artifacts, safe_remove_workdir
 from game2apk.signing import SigningService
 from game2apk.staging import StageService
 from game2apk.translation import (
@@ -230,6 +230,54 @@ class PipelineTests(unittest.TestCase):
         unsafe.mkdir(parents=True)
         with self.assertRaises(BlockedError):
             safe_remove_workdir(unsafe, work_base, "project-x")
+
+    def test_run_cleanup_removes_generated_copies_but_can_keep_checkpoint(self) -> None:
+        report = inspect_game(self.game)
+        work_base = self.root / ".work"
+        stage = StageService().stage(report, work_base, minimum_free_bytes=0)
+        run_dir = Path(stage.manifest_path).parent
+        android_www = run_dir / "android" / "app" / "src" / "main" / "assets" / "www"
+        android_www.mkdir(parents=True)
+        (android_www / "duplicate.bin").write_bytes(b"generated copy")
+        pack_dir = run_dir / "resource-pack"
+        pack_dir.mkdir()
+        (pack_dir / "demo.g2ares").write_bytes(b"generated pack")
+
+        removed = safe_cleanup_run_artifacts(run_dir, work_base, stage.project_id, remove_staged=False)
+        self.assertEqual(set(removed), {"android", "resource-pack"})
+        self.assertTrue(Path(stage.staged_www).is_dir())
+        self.assertFalse((run_dir / "android").exists())
+        self.assertFalse((run_dir / "resource-pack").exists())
+        self.assertTrue((run_dir / "stage-manifest.json").is_file())
+
+        # A successful promotion is allowed to discard the resumable copy as
+        # well; audit JSON/log files remain in the run directory.
+        removed_final = safe_cleanup_run_artifacts(run_dir, work_base, stage.project_id, remove_staged=True)
+        self.assertEqual(removed_final, ("staged",))
+        self.assertFalse(Path(stage.staged_www).exists())
+        self.assertTrue((run_dir / "stage-manifest.json").is_file())
+
+    def test_promote_cleans_successful_run_copies(self) -> None:
+        from types import SimpleNamespace
+
+        report = inspect_game(self.game)
+        work_base = self.root / ".work"
+        stage = StageService().stage(report, work_base, minimum_free_bytes=0)
+        run_dir = Path(stage.manifest_path).parent
+        (run_dir / "android" / "app" / "src" / "main" / "assets" / "www").mkdir(parents=True)
+        (run_dir / "resource-pack").mkdir()
+        fake_report = SimpleNamespace(
+            report_path=str(run_dir / "verification-report.json"),
+            apk_path=str(run_dir / "android" / "app" / "build" / "outputs" / "apk" / "release" / "app-release-signed.apk"),
+        )
+        (run_dir / "verification-report.json").write_text("{}", encoding="utf-8")
+        with mock.patch("game2apk.pipeline.VerificationService.promote", return_value=self.root / "dist" / "demo-signed.apk"):
+            promoted = PipelineService(self.root).promote(fake_report, self._config())
+        self.assertEqual(promoted, self.root / "dist" / "demo-signed.apk")
+        self.assertFalse((run_dir / "staged").exists())
+        self.assertFalse((run_dir / "android").exists())
+        self.assertFalse((run_dir / "resource-pack").exists())
+        self.assertTrue((run_dir / "stage-manifest.json").is_file())
 
     def test_patch_requires_unique_point_and_writes_versioned_config(self) -> None:
         report = inspect_game(self.game)

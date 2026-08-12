@@ -365,6 +365,10 @@ class WizardApp:
                 raise Game2ApkError("Android 构建工具链未就绪：" + ", ".join(missing) + "。请先在顶部选择/安装并保存路径。")
             result = self.service.build(str(settings["template"]), stage, config, toolchain=configured_tools, api_key=settings["api_key"])
             if result.return_code != 0 or not result.apk_path:
+                try:
+                    self.service.cleanup_failed_build(result)
+                except Exception as cleanup_error:
+                    self.progress("cleanup", 1.0, f"cleanup warning: {cleanup_error}")
                 raise Game2ApkError(f"Gradle 构建失败，退出码 {result.return_code}；日志：{result.log_path}")
             self.service.sign(result, config, password=settings["sign_password"])
             verification = self.service.verify(result, config, install=False)

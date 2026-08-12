@@ -657,6 +657,21 @@ class JobManager:
                 partial["build"] = _json_safe(result)
                 job.set_result(partial)
                 if result.return_code != 0 or not result.apk_path:
+                    cleanup_failed = getattr(service, "cleanup_failed_build", None)
+                    if callable(cleanup_failed):
+                        try:
+                            removed = cleanup_failed(result)
+                            if removed:
+                                partial["cleanup"] = {
+                                    "removed": list(removed),
+                                    "keptPreparedCheckpoint": True,
+                                }
+                                job.set_result(partial)
+                        except Exception as cleanup_error:
+                            # A locked intermediate must not hide the real
+                            # Gradle failure; leave a visible warning in the
+                            # bounded job log instead.
+                            job.update_progress("cleanup", 1.0, f"cleanup warning: {cleanup_error}")
                     raise Game2ApkError(f"Gradle build failed with exit code {result.return_code}")
 
                 if job.cancel_event.is_set():

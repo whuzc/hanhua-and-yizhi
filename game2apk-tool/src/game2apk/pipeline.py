@@ -18,7 +18,7 @@ from .errors import BlockedError
 from .inspector import inspect_game
 from .models import BuildConfig, BuildResult, InspectionReport, StageManifest, ToolchainInfo, TranslationReport, VerificationReport
 from .patcher import patch_staged_www
-from .security import atomic_write_json, atomic_write_text, now_utc
+from .security import atomic_write_json, atomic_write_text, now_utc, safe_cleanup_run_artifacts
 from .signing import SigningService
 from .staging import StageService
 from .translation import (
@@ -454,7 +454,72 @@ class PipelineService:
     def promote(self, report: VerificationReport, config: BuildConfig) -> Path:
         safe_name = re.sub(r"[^0-9A-Za-z\u3400-\u9fff_-]+", "-", config.app_name).strip("-") or config.application_id
         filename = f"{safe_name}-{config.version_name}-signed.apk"
-        return VerificationService.promote(report, self.root / "dist", filename)
+        promoted = VerificationService.promote(report, self.root / "dist", filename)
+        # The APK/resource pack are now the durable deliverables.  Remove the
+        # expanded staged tree and generated Android project from this run so
+        # a successful build does not leave two extra copies of the game in
+        # .work.  Audit reports remain in the run directory.  Cleanup is best
+        # effort: a Windows file lock must not invalidate an already-promoted
+        # signed artifact.
+        try:
+            removed = self._cleanup_run_from_report(report, remove_staged=True)
+        except (BlockedError, OSError, ValueError) as exc:
+            self.progress("cleanup", 1.0, f"promoted; intermediate cleanup skipped: {exc}")
+        else:
+            if removed:
+                self.progress("cleanup", 1.0, f"promoted; removed regenerable run copies: {', '.join(removed)}")
+        return promoted
+
+    def cleanup_failed_build(self, result: BuildResult) -> tuple[str, ...]:
+        """Drop failed-build copies while retaining the prepared checkpoint."""
+
+        run_dir = Path(result.work_dir).resolve(strict=False).parent
+        removed = self._cleanup_run_directory(run_dir, remove_staged=False)
+        if removed:
+            self.progress("cleanup", 1.0, f"failed build; retained staged checkpoint and removed: {', '.join(removed)}")
+        return removed
+
+    def _cleanup_run_from_report(self, report: VerificationReport, *, remove_staged: bool) -> tuple[str, ...]:
+        """Resolve a verifier report to its marker-owned run before cleanup."""
+
+        candidates: list[Path] = []
+        if report.report_path:
+            candidates.append(Path(report.report_path).resolve(strict=False).parent)
+        if report.apk_path:
+            apk = Path(report.apk_path).resolve(strict=False)
+            candidates.extend(parent for parent in apk.parents if (parent / "stage-manifest.json").is_file())
+        for run_dir in candidates:
+            result = self._cleanup_run_directory(run_dir, remove_staged=remove_staged, missing_ok=True)
+            if result is not None:
+                return result
+        return ()
+
+    def _cleanup_run_directory(
+        self,
+        run_dir: Path,
+        *,
+        remove_staged: bool,
+        missing_ok: bool = False,
+    ) -> tuple[str, ...] | None:
+        """Validate an owned run and remove only its regenerable children."""
+
+        manifest_path = run_dir / "stage-manifest.json"
+        if missing_ok and not manifest_path.is_file():
+            return None
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            project_id = str(manifest["projectId"])
+            removed = safe_cleanup_run_artifacts(
+                run_dir,
+                self.work_root,
+                project_id,
+                remove_staged=remove_staged,
+            )
+        except (OSError, ValueError, KeyError, TypeError, BlockedError):
+            if missing_ok:
+                return None
+            raise
+        return removed
 
     def default_build_config(self) -> BuildConfig:
         data = build_config(control=default_control_config())

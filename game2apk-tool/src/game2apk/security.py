@@ -219,3 +219,72 @@ def safe_remove_workdir(work_dir: str | os.PathLike[str], work_base: str | os.Pa
     if marker.get("tool") != TOOL_NAME or marker.get("project_id") != project_id:
         raise BlockedError("refusing to remove a work directory with a mismatched marker")
     shutil.rmtree(target)
+
+
+def safe_cleanup_run_artifacts(
+    run_dir: str | os.PathLike[str],
+    work_base: str | os.PathLike[str],
+    project_id: str,
+    *,
+    remove_staged: bool,
+) -> tuple[str, ...]:
+    """Remove only regenerable game copies from one owned build run.
+
+    A run keeps its small audit files (manifest, build log, signing report and
+    verification report), while the large ``staged/www``, generated Android
+    project and external resource-pack directories are disposable.  The
+    marker/manifest checks deliberately happen before any delete so a forged
+    report cannot turn cleanup into an arbitrary path removal.
+
+    ``remove_staged=False`` is used after a failed/cancelled build: the staged
+    tree is the resumable checkpoint.  A successful promoted build can remove
+    it as well because the signed APK/resource pack now live in ``dist``.
+    """
+
+    raw_target = Path(run_dir).expanduser()
+    if raw_target.is_symlink():
+        raise BlockedError("refusing to clean a symlinked build run")
+    target = require_within(raw_target, work_base, "build run")
+    base = resolve_path(work_base)
+    project_dir = target.parent.parent if target.parent.name == "runs" else target.parent
+    if target == base or project_dir.parent != base or project_dir.name != project_id or target.parent.name != "runs":
+        raise BlockedError("refusing to clean a run outside its marked project")
+
+    marker_path = project_dir / TOOL_MARKER
+    if not marker_path.is_file():
+        raise BlockedError("refusing to clean a run without a project marker")
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise BlockedError("refusing to clean a run with an unreadable marker") from exc
+    if marker.get("tool") != TOOL_NAME or marker.get("project_id") != project_id:
+        raise BlockedError("refusing to clean a run with a mismatched project marker")
+
+    manifest_path = target / "stage-manifest.json"
+    if not manifest_path.is_file():
+        raise BlockedError("refusing to clean a run without a stage manifest")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise BlockedError("refusing to clean a run with an unreadable stage manifest") from exc
+    if not isinstance(manifest, dict):
+        raise BlockedError("refusing to clean a run with an invalid stage manifest")
+    if manifest.get("schemaVersion") != 1 or manifest.get("projectId") != project_id or manifest.get("runId") != target.name:
+        raise BlockedError("refusing to clean a run with a mismatched stage manifest")
+    if manifest.get("manifestPath") != str(manifest_path.resolve()):
+        raise BlockedError("refusing to clean a run whose manifest path is not self-identifying")
+
+    names = ["android", "resource-pack"]
+    if remove_staged:
+        names.append("staged")
+    removed: list[str] = []
+    for name in names:
+        child = target / name
+        if not child.exists() and not child.is_symlink():
+            continue
+        if child.is_symlink():
+            raise BlockedError(f"refusing to clean a symlinked run artifact: {child}")
+        require_within(child, target, f"run artifact {name}")
+        shutil.rmtree(child)
+        removed.append(name)
+    return tuple(removed)

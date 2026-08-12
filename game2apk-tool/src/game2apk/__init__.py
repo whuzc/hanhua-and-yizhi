@@ -4,4 +4,4 @@ The package deliberately contains no Android template implementation.  The
 template is an owned integration input supplied by a separate task.
 """
 
-__version__ = "1.5.1"
+__version__ = "1.5.2"
