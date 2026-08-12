@@ -279,6 +279,21 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse((run_dir / "resource-pack").exists())
         self.assertTrue((run_dir / "stage-manifest.json").is_file())
 
+    def test_pipeline_build_exception_cleans_generated_children_and_keeps_stage(self) -> None:
+        report = inspect_game(self.game)
+        work_base = self.root / ".work"
+        stage = StageService().stage(report, work_base, minimum_free_bytes=0)
+        run_dir = Path(stage.manifest_path).parent
+        (run_dir / "android" / "partial").mkdir(parents=True)
+        (run_dir / "resource-pack").mkdir()
+        with mock.patch("game2apk.pipeline.BuildService") as builder_cls:
+            builder_cls.return_value.build.side_effect = RuntimeError("synthetic wrapper failure")
+            with self.assertRaisesRegex(RuntimeError, "synthetic wrapper failure"):
+                PipelineService(self.root).build(self.root / "template", stage, self._config())
+        self.assertFalse((run_dir / "android").exists())
+        self.assertFalse((run_dir / "resource-pack").exists())
+        self.assertTrue(Path(stage.staged_www).is_dir())
+
     def test_patch_requires_unique_point_and_writes_versioned_config(self) -> None:
         report = inspect_game(self.game)
         stage = StageService().stage(report, self.root / ".work", minimum_free_bytes=0)

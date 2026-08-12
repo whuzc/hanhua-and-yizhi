@@ -400,7 +400,35 @@ class PipelineService:
         api_key: str | None = None,
         toolchain: ToolchainInfo | None = None,
     ) -> BuildResult:
-        return BuildService(self.progress, self.cancel_event).build(template, stage, config, toolchain=toolchain, api_key=api_key)
+        try:
+            return BuildService(self.progress, self.cancel_event).build(
+                template,
+                stage,
+                config,
+                toolchain=toolchain,
+                api_key=api_key,
+            )
+        except Exception:
+            # BuildService can fail before it has a BuildResult (toolchain
+            # validation, wrapper startup, cancellation or template copy).
+            # Still remove only generated children and retain staged/www for
+            # the next identical run.  Never replace the original exception
+            # with a cleanup failure.
+            if stage.manifest_path:
+                try:
+                    removed = self._cleanup_run_directory(
+                        Path(stage.manifest_path).resolve(strict=False).parent,
+                        remove_staged=False,
+                    )
+                    if removed:
+                        self.progress(
+                            "cleanup",
+                            1.0,
+                            f"build stopped; retained staged checkpoint and removed: {', '.join(removed)}",
+                        )
+                except (BlockedError, OSError, ValueError, KeyError, TypeError) as cleanup_error:
+                    self.progress("cleanup", 1.0, f"cleanup warning: {cleanup_error}")
+            raise
 
     def sign(self, result: BuildResult, config: BuildConfig, password: str | None = None) -> dict[str, object]:
         if not result.apk_path:
