@@ -167,7 +167,7 @@ public final class MainActivity extends Activity {
 
         WebViewAssetLoader.Builder assetBuilder = new WebViewAssetLoader.Builder()
                 .setDomain(ASSET_HOST)
-                .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this));
+                .addPathHandler("/assets/", new CaseInsensitiveAssetsPathHandler(this));
         if (resourcePackHandler != null) {
             assetBuilder.addPathHandler("/game/", resourcePackHandler);
         }
